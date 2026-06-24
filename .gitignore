@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Regenerated artifacts — the figure/log modules write these next to themselves.
+# Curated copies live in figures/ and are committed; these are not.
+Code/*.png
+Code/*.jsonl

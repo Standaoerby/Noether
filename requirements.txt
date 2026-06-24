@@ -1,0 +1,4 @@
+# Core tower: numpy. Figure modules (sim_pareto, sim_portfolio): matplotlib.
+# Everything else is Python standard library.
+numpy>=1.26
+matplotlib>=3.8
