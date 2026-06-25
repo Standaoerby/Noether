@@ -26,6 +26,7 @@ The tower, bottom to top:
   sim_portfolio the portfolio effect        : variance-averaging across demes
   sim_eventlog  a universal event log        : faithful, queryable, narratable history
   sim_stage2    a mind inside a pawn          : typed action, conserved, replayable cognition
+  sim_comm      communication events          : claims (true/false) reshape belief; rivalrous-resource capture
 
 Run:  python3 verify_all.py
 """
@@ -47,6 +48,7 @@ MODULES = [
     ("sim_portfolio", "portfolio effect: variance-averaging law"),
     ("sim_eventlog",  "universal event log: faithful, queryable history"),
     ("sim_stage2",    "a mind inside a pawn: typed, conserved, replayable"),
+    ("sim_comm",      "communication events: belief spreads, can be shaped"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
