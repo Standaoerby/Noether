@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 
 import numpy as np
 
@@ -73,6 +73,13 @@ SPEAKER_MOD = 4        # founders with oid % SPEAKER_MOD == 0 are speakers (~25%
 
 DAYS = 300
 THINK_EVERY = 6
+
+# A speaker's decision about what to broadcast. `cell` is the target cell, `claim`
+# the (unrounded) food value asserted there, `truthful` whether it matches reality,
+# and `extra` an optional dict merged verbatim into the communication event (the
+# focal-LLM layer uses it to carry the speaker's `rationale`). The default policy
+# returns `extra={}`, so the canonical sim_comm event is unchanged.
+Claim = namedtuple("Claim", "cell claim truthful extra")
 
 
 def legal_dirs(i, j):
@@ -200,6 +207,27 @@ class CommWorld:
         return {"oid": a.oid, "gene": a.gene, "cell": (a.i, a.j),
                 "legal": legal, "T_row": self.Trow, "memory": dict(self.mem[a.oid])}
 
+    # ---- the speaker seam ------------------------------------------------- #
+    def _decide_claim(self, spk):
+        """What does this speaker broadcast? Returns a `Claim` or None (silent).
+
+        The default policy is fixed by regime: honest speakers point listeners at
+        the best cell they know (claim = its true food); deceptive speakers lure
+        listeners to the worst cell they know and inflate it to OASIS_CAP. This is
+        the only place a claim is born, so sim_comm_llm can subclass CommWorld and
+        override just this method to plug in a strategic / LLM speaker — without
+        touching the conserved dynamics around it."""
+        smem = self.mem[spk.oid]
+        if not smem:
+            return None
+        if self.regime == "honest":          # point to a real good spot
+            B = max(smem, key=lambda c: smem[c][0])
+            claim = smem[B][0]
+        else:                                # lure to a known-poor decoy
+            B = min(smem, key=lambda c: smem[c][0])
+            claim = OASIS_CAP
+        return Claim(B, claim, self.regime == "honest", {})
+
 
     def step(self):
         self.t += 1
@@ -272,22 +300,19 @@ class CommWorld:
                     if not speakers or not listeners:
                         continue
                     for spk in speakers:
-                        smem = self.mem[spk.oid]
-                        if not smem:
+                        cl = self._decide_claim(spk)
+                        if cl is None:
                             continue
-                        if self.regime == "honest":       # point to a real good spot
-                            B = max(smem, key=lambda c: smem[c][0])
-                            claim = smem[B][0]
-                        else:                             # lure to a known-poor decoy
-                            B = min(smem, key=lambda c: smem[c][0])
-                            claim = OASIS_CAP
+                        B, claim, truthful = cl.cell, cl.claim, cl.truthful
                         true_B = float(self.plant[B[0], B[1]])
+                        data = {"cell": list(B), "claim_food": round(claim, 2),
+                                "claim_exact": claim,
+                                "true_food": round(true_B, 2),
+                                "truthful": truthful,
+                                "heard_by": len(listeners)}
+                        data.update(cl.extra)
                         self.log.emit(self.t, "communication", "individual",
-                                      where=(i, j), actor=spk.oid,
-                                      data={"cell": list(B), "claim_food": round(claim, 2),
-                                            "true_food": round(true_B, 2),
-                                            "truthful": self.regime == "honest",
-                                            "heard_by": len(listeners)})
+                                      where=(i, j), actor=spk.oid, data=data)
                         for L in listeners:               # naive trust about a remote cell
                             if B == (L.i, L.j):
                                 continue

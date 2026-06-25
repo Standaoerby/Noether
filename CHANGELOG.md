@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-25 — focal LLM speakers; deception as equilibrium
+
+Added `sim_comm_llm` — a **pluggable speaker policy** over `sim_comm`'s substrate, and the finding that **deception is an equilibrium, not an instruction**. The tower is now **12 modules**, all green under `verify_all.py` (conservation + byte-determinism).
+
+- **`sim_comm.py`** (refactor, output byte-identical): the speaker's claim is now born in one seam, `CommWorld._decide_claim(spk) -> Claim | None`, and the `communication` event carries an extra `claim_exact` (the unrounded asserted value, for exact replay) plus an optional `extra` dict (the LLM tier uses it for `rationale`/`policy`). The default regime behaviour is unchanged — `sim_comm.py`'s canonical stdout is verified bit-for-bit identical (audience 2332/2000/1080, biomass 799.4/570.1/267.2, belief-error 0.0/4.39/142.7, elite 544/577/830).
+- **`sim_comm_llm.py`** (new): `LLMCommWorld(CommWorld)` routes `_decide_claim` through a policy. Policies share `decide(view) -> PolicyClaim | None`:
+  - `MockStrategicPolicy(keep_threshold=0.5)` — a self-interested speaker **never told to lie**. It lies only when its current cell is *worth keeping* (`here_food >= keep_threshold * best_known`), luring rivals to the farthest worthless cell it knows; otherwise it has nothing to guard and reports the truth. Deterministic — `main()` uses it, so the gate dials no API.
+  - `ClaudePolicy(client=None, …)` — a real Claude speaker, **inert without a client** (no import, no network); wired live by `run_focal_claude.py`. `anthropic` is imported lazily inside `decide`, never at module level.
+  - `ReplayPolicy(events)` — replays logged claims bit-for-bit, the stage-2 stochastic-mind replay contract applied to speech.
+  - **Finding (seed 7, 300 days, all speakers strategic):** a speaker with *no instruction to lie* still **lies 58 %** of the time, purely from self-interest — and captures **harder** than `sim_comm`'s scripted liar. Elite (speakers) **830→910** living, **286.5→333.1 kg** biomass, mean body **0.345→0.366 kg**; audience **1080→1156** living but mean body only 0.280 kg — the rivalrous patch still ends up the elite's. Yet the audience's **belief-error falls 142.7→85.0 kg**: the mixed strategy (truthful when there is nothing to protect) is *more informative to the public and more extractive for the elite* at once. (These supersede the work-order's draft figures 977/368 — re-measured against the actual implementation per house rule "verify, don't trust".) Matter drift ~1e-12 kg; replay-by-rerun **and** replay-from-log both bit-identical; `ClaudePolicy()` inert (0 claims) in CI.
+- **`run_focal_claude.py`** (new, *not* in `verify_all`): argparse CLI (`--focal`, `--days`, `--think-every`, `--seed`, `--model` default `claude-sonnet-4-6`) that drives the focal speakers with a live Claude, logs every claim to JSONL next to the script, prints the audience-vs-elite table / lie fraction / rationale-vs-outcome, and proves the stochastic run replays bit-for-bit from its own log. `anthropic` import guarded inside `main()` — importing the module and `--help` touch no network.
+- **`verify_all.py`**: extended to 12 modules; `sim_comm_llm` registered (conservation in every regime + cross-process byte-determinism on `MockStrategicPolicy`).
+- **Docs**: [`docs/communication-events.md`](docs/communication-events.md) gains a speaker-policy section (the `_decide_claim` seam, focal/cohort tiers, replay-from-log for stochastic speakers); [`docs/theoria-elitis-threads.md`](docs/theoria-elitis-threads.md) gains the 🔖 thread *deception is an equilibrium, not an instruction*.
+
 ## 2026-06-24 — communication-events layer
 
 Added `sim_comm` — communication events: belief spreads, and can be shaped. The tower is now **11 modules**, all green under `verify_all.py` (conservation + byte-determinism). Realizes cognition principle 7 (communication is events too).
