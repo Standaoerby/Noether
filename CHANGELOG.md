@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-25 — polarization & factions: empirical elite-theory metrics
+
+Added `sim_polariz` — deterministic measurements of polarization, factions, claim propagation, and rationale-vs-outcome over the four speaking regimes. **No new dynamics**: it only measures the divergent subjective memories `sim_comm`/`sim_comm_llm` already produce. The tower is now **13 modules**, all green under `verify_all.py`.
+
+- **`sim_polariz.py`** (new): pulls `run` from `sim_comm` (`none`/`honest`/`deceptive`) and `run_policy(MockStrategicPolicy())` from `sim_comm_llm` (`mock-strategic`), then computes — all RNG-free, sorted-iteration, population stats (ddof=0):
+  - **Belief polarization** — believer-weighted mean of per-cell belief-std (over cells with ≥2 living believers). Measured (kg): **none 2.14 · honest 2.35 · deceptive 26.03 · mock-strategic 39.07**. Lies polarize belief ~12× vs silence; *emergent* strategic lying polarizes hardest.
+  - **Factions** — agents grouped by binned stance (`ε=10 kg`) on the `K=6` most-contested cells (a fixed, RNG-free agglomeration). Factions (≥2 members): **20 · 22 · 45 · 49**; the consensus bloc's share of clustered agents collapses **0.57 → 0.38 → 0.20 → 0.33** — deception roughly doubles the faction count and shatters consensus.
+  - **Propagation** (log-only) — mean listeners exposed per claim **14.5 (honest) vs 11.1 (deceptive)**; honest claims about real oases draw bigger crowds than lies pointing at deserts.
+  - **Rationale-vs-outcome** (mock-strategic, whole run) — **57.8 %** of claims deceptive; lies reach *fewer* listeners than honest claims (7.79 vs 17.17 — deserts are emptier than oases), yet the elite still banks a **+0.087 kg** mean-body gap over the audience.
+  - Self-verifying: `main()` recomputes the full metric set and asserts the fingerprint is byte-identical (`ac7fcef400f48656`); two processes produce byte-identical stdout.
+- **`verify_all.py`**: extended to 13 modules; `sim_polariz` registered. Gate stays green (**13/13**, deterministic=yes). `sim_comm` (2332/2000/1080; 799.4/570.1/267.2; elite 544/577/830) and `sim_comm_llm` (910/333.1; lie 0.578; belief-error 85.0; replay `f353ac30db73b770`) outputs unchanged.
+- **Docs**: [`docs/communication-events.md`](docs/communication-events.md) gains a "polarization & factions" section; [`docs/theoria-elitis-threads.md`](docs/theoria-elitis-threads.md) gains the 🔖 thread *polarization and factions as measurable quantities on an honest substrate*.
+
 ## 2026-06-25 — focal LLM speakers; deception as equilibrium
 
 Added `sim_comm_llm` — a **pluggable speaker policy** over `sim_comm`'s substrate, and the finding that **deception is an equilibrium, not an instruction**. The tower is now **12 modules**, all green under `verify_all.py` (conservation + byte-determinism).
