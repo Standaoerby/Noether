@@ -40,6 +40,7 @@ Pure stdlib + numpy at module level; `anthropic` is imported only inside
 
 from __future__ import annotations
 
+import random
 from collections import namedtuple
 
 import numpy as np
@@ -47,7 +48,7 @@ import numpy as np
 import sim_comm
 from sim_comm import (
     CommWorld, Claim, run as run_scripted,
-    OASIS_CAP, DAYS, THINK_EVERY,
+    OASIS_CAP, DAYS, THINK_EVERY, R, C,
 )
 from sim_eventlog import EventLog, SEED
 
@@ -153,6 +154,164 @@ class ClaudePolicy:
                            rationale=str(obj.get("rationale", ""))[:120])
 
 
+class OllamaPolicy:
+    """A cheap LOCAL speaker driven by an Ollama-served model — the COHORT tier (the
+    masses), alongside focal `ClaudePolicy` (the protagonists).
+
+    Mirrors `ClaudePolicy`: it builds the prompt from the speaker's own `view`, asks
+    for the same JSON object (here keyed `target_cell`), and returns a `PolicyClaim`.
+    It differs in transport (native Ollama `POST /api/chat` over stdlib `urllib`, no
+    pip deps) and in robustness: Ollama's `format` (JSON-schema) is sent only as a
+    HINT and is NOT reliably enforced for the Qwen tags on the target box, so the
+    output is coerced defensively — parse, validate, key-alias near-misses, clamp,
+    retry, and on persistent failure fall back to an honest claim so the conserved
+    sim NEVER crashes on a bad generation.
+
+    Inert offline, like `ClaudePolicy`: constructing it touches no network; the HTTP
+    call happens only inside `decide`. If the endpoint is unreachable at `decide`
+    time the error propagates (no silent network default). It is NOT exercised by
+    `verify_all.py`; `run_cohort_ollama.py` drives it live at home."""
+
+    name = "ollama"
+
+    # near-miss keys the model emits instead of the schema's -> canonical key
+    _ALIASES = {"cell": "target_cell", "food": "claim_food",
+                "claim": "claim_food", "reason": "rationale"}
+
+    def __init__(self, endpoint="http://localhost:11434", model="qwen3:14b",
+                 temperature=0.7, n_retry=2, num_ctx=8192, timeout=120):
+        self.endpoint = endpoint.rstrip("/")
+        self.model = model
+        self.temperature = temperature
+        self.n_retry = n_retry
+        self.num_ctx = num_ctx
+        self.timeout = timeout
+        self.n_fallback = 0                      # bad generations honestly recovered
+
+    # ---- schema & prompt (mirror ClaudePolicy, schema key = target_cell) ---- #
+    def _schema(self):
+        return {
+            "type": "object",
+            "properties": {
+                "target_cell": {"type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 2, "maxItems": 2},
+                "claim_food": {"type": "number"},
+                "rationale": {"type": "string"},
+            },
+            "required": ["target_cell", "claim_food", "rationale"],
+        }
+
+    def _build_prompt(self, view, reinforce=""):
+        smem = view["memory"]
+        known = "; ".join(f"{c}={v[0]:.0f}kg" for c, v in sorted(smem.items()))
+        return (
+            "You are a forager that can broadcast ONE claim about where food is to "
+            "rivals sharing your cell; they will believe and act on it. Food sits in "
+            "moving oases on a rivalrous map. You are at "
+            f"{view['cell']} with {view['here_food']:.0f}kg here. You know: {known}. "
+            "Reply with ONLY a JSON object: "
+            '{"target_cell": [row, col], "claim_food": <number>, '
+            '"rationale": "<short>"}.' + reinforce)
+
+    # ---- transport: native Ollama /api/chat, stdlib only (monkeypatch point) #
+    def _chat(self, prompt):
+        """POST one message to Ollama and return `message.content`. The ONLY network
+        touch; isolated so the offline self-test can monkeypatch it."""
+        import json
+        import urllib.request
+        body = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "think": False,                      # Qwen thinks by default -> off
+            "stream": False,
+            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            "format": self._schema(),            # best-effort hint only, NOT a guarantee
+        }
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.endpoint}/api/chat", data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return payload["message"]["content"]
+
+    # ---- robust JSON coercion ---------------------------------------------- #
+    @staticmethod
+    def _loads(content):
+        """Parse `content` as JSON, tolerating surrounding prose/markdown."""
+        import json
+        if not isinstance(content, str):
+            return None
+        try:
+            return json.loads(content)
+        except Exception:
+            pass
+        s, e = content.find("{"), content.rfind("}")
+        if 0 <= s < e:
+            try:
+                return json.loads(content[s:e + 1])
+            except Exception:
+                return None
+        return None
+
+    def _alias(self, obj):
+        out = dict(obj)
+        for src, dst in self._ALIASES.items():
+            if dst not in out and src in out:
+                out[dst] = out[src]
+        return out
+
+    def _coerce(self, content, view):
+        """content -> a valid PolicyClaim, or None if it cannot be salvaged.
+        Validate shape; on near-miss keys, alias and retry the shape check; then
+        clamp the cell to the grid and `claim_food` to [0, OASIS_CAP]."""
+        obj = self._loads(content)
+        if not isinstance(obj, dict):
+            return None
+        obj = self._alias(obj)                   # map cell/food/claim/reason near-misses
+        tc, cf = obj.get("target_cell"), obj.get("claim_food")
+        if not isinstance(tc, (list, tuple)) or len(tc) != 2:
+            return None
+        try:
+            ci, cj = int(tc[0]), int(tc[1])
+            food = float(cf)
+        except (TypeError, ValueError):
+            return None
+        if food != food:                         # NaN
+            return None
+        cell = (min(max(ci, 0), R - 1), min(max(cj, 0), C - 1))   # clamp to grid
+        food = min(max(food, 0.0), OASIS_CAP)                     # clamp like ClaudePolicy
+        rec = view["memory"].get(cell)
+        truthful = rec is not None and abs(food - rec[0]) <= 1e-9
+        return PolicyClaim(cell=cell, claim=food, truthful=truthful,
+                           rationale=str(obj.get("rationale", ""))[:120])
+
+    def _honest_fallback(self, view):
+        """Speaker's best-known real cell + its true food — so a bad generation
+        degrades to honesty, never a crash. Deterministic tiebreak on the cell."""
+        smem = view["memory"]
+        B = max(smem, key=lambda c: (smem[c][0], c))
+        return PolicyClaim(cell=B, claim=smem[B][0], truthful=True,
+                           rationale="ollama fallback: bad generation -> "
+                                     "honest best-known claim")
+
+    def decide(self, view):
+        smem = view["memory"]
+        if not smem:
+            return None                          # nothing known -> nothing to say
+        reinforce = ""
+        for _ in range(self.n_retry + 1):
+            content = self._chat(self._build_prompt(view, reinforce))  # net error -> raises
+            pc = self._coerce(content, view)
+            if pc is not None:
+                return pc
+            reinforce = ("\n\nReturn ONLY JSON matching the schema. "
+                         "No prose, no markdown.")
+        self.n_fallback += 1                     # persistent garbage -> honest fallback
+        return self._honest_fallback(view)
+
+
 class ReplayPolicy:
     """Replays logged `communication` claims bit-for-bit. A stochastic focal speaker
     (Claude) is made reproducible by re-running the deterministic substrate while
@@ -184,35 +343,81 @@ class LLMCommWorld(CommWorld):
     fixed to "deceptive" purely to OPEN the speaking channel; what is actually said
     is the policy's call, not the regime's. `focal` (a set of oids) restricts which
     speakers consult the policy — the LLM tier; `focal=None` lets every speaker
-    speak. The conserved dynamics are untouched: only `_decide_claim` is overridden."""
+    speak. The conserved dynamics are untouched: only `_decide_claim` is overridden.
 
-    def __init__(self, log, policy, seed=SEED, focal=None):
+    Two tiers can coexist. `cohort` adds the masses: a set of speaker oids — or a
+    fraction of speakers, selected deterministically from the seed — driven by
+    `cohort_policy` (e.g. a local `OllamaPolicy`). With a cohort requested, each
+    speaking speaker is routed by tier: cohort -> `cohort_policy`; focal -> `policy`;
+    everyone else -> the regime's scripted default (`CommWorld._decide_claim`). With
+    `cohort=None` the class behaves EXACTLY as before — same focal-only seam."""
+
+    def __init__(self, log, policy, seed=SEED, focal=None,
+                 cohort=None, cohort_policy=None):
+        if cohort is not None and cohort_policy is None:
+            raise ValueError("cohort requested but no cohort_policy given")
         self.policy = policy
         self.focal = focal
+        self.cohort = cohort
+        self.cohort_policy = cohort_policy
         super().__init__(log, seed=seed, regime="deceptive")
+        self._cohort_ids = self._resolve_cohort(cohort)
 
-    def _decide_claim(self, spk):
-        if self.focal is not None and spk.oid not in self.focal:
-            return None                          # non-focal speakers stay silent
+    def _resolve_cohort(self, cohort):
+        """Resolve `cohort` (None | set-of-oids | fraction) to a concrete oid set.
+        A fraction selects from the SORTED founder-speaker oids with a dedicated RNG
+        seeded from the world seed, so the assignment is deterministic and never
+        perturbs `self.rng` (which drives the conserved substrate)."""
+        if cohort is None:
+            return None
+        if isinstance(cohort, (set, frozenset, list, tuple)):
+            return {int(x) for x in cohort}
+        speaker_ids = sorted(self.speaker)       # founder speakers exist at init
+        k = int(float(cohort) * len(speaker_ids))
+        if k <= 0:
+            return set()
+        r = random.Random(self.seed * 2_654_435_761 + 0x5EED)
+        return set(r.sample(speaker_ids, k))
+
+    def _policy_claim(self, policy, spk):
+        """Build the speaker's view, consult `policy`, and lift its `PolicyClaim`
+        into a substrate `Claim` (the same construction the focal seam always used)."""
         view = {"oid": spk.oid, "t": self.t, "cell": (spk.i, spk.j),
                 "here_food": float(self.plant[spk.i, spk.j]),
                 "memory": dict(self.mem[spk.oid])}
-        pc = self.policy.decide(view)
+        pc = policy.decide(view)
         if pc is None:
             return None
         return Claim(pc.cell, pc.claim, pc.truthful,
-                     {"rationale": pc.rationale, "policy": self.policy.name})
+                     {"rationale": pc.rationale, "policy": policy.name})
+
+    def _decide_claim(self, spk):
+        if self._cohort_ids is None:             # no cohort: behave exactly as before
+            if self.focal is not None and spk.oid not in self.focal:
+                return None                      # non-focal speakers stay silent
+            return self._policy_claim(self.policy, spk)
+        # cohort run: route each speaker to its tier
+        if spk.oid in self._cohort_ids:
+            return self._policy_claim(self.cohort_policy, spk)
+        if self.focal is not None and spk.oid in self.focal:
+            return self._policy_claim(self.policy, spk)
+        return super()._decide_claim(spk)        # remainder: regime's scripted default
 
 
-def run_policy(policy, seed=SEED, focal=None, days=DAYS, think_every=THINK_EVERY):
+def run_policy(policy, seed=SEED, focal=None, days=DAYS, think_every=THINK_EVERY,
+               cohort=None, cohort_policy=None):
     """Run the substrate with `policy` driving the speakers. `think_every` overrides
     sim_comm's module constant locally (restored afterward), so the home runner can
-    change the speaking cadence without editing sim_comm.py."""
+    change the speaking cadence without editing sim_comm.py.
+
+    `cohort`/`cohort_policy` add the cohort tier (see `LLMCommWorld`). With both left
+    at None the run is identical to the focal-only path."""
     saved = sim_comm.THINK_EVERY
     sim_comm.THINK_EVERY = think_every
     try:
         log = EventLog()
-        w = LLMCommWorld(log, policy, seed=seed, focal=focal)
+        w = LLMCommWorld(log, policy, seed=seed, focal=focal,
+                         cohort=cohort, cohort_policy=cohort_policy)
         for _ in range(days):
             w.step()
     finally:
