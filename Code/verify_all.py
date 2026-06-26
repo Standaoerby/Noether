@@ -29,6 +29,7 @@ The tower, bottom to top:
   sim_comm      communication events          : claims (true/false) reshape belief; rivalrous-resource capture
   sim_comm_llm  focal LLM speakers            : pluggable speaker policy; deception emerges as equilibrium
   sim_polariz   polarization & factions        : empirical elite-theory metrics on divergent beliefs
+  sim_trust     trust-weighting               : accountable listeners; does reputation break the lie equilibrium
 
 Run:  python3 verify_all.py
 """
@@ -53,6 +54,7 @@ MODULES = [
     ("sim_comm",      "communication events: belief spreads, can be shaped"),
     ("sim_comm_llm",  "focal LLM speakers: pluggable policy; deception as equilibrium"),
     ("sim_polariz",   "polarization, factions, propagation: empirical elite-theory metrics"),
+    ("sim_trust",     "trust-weighting: accountable listeners vs the lie equilibrium"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
