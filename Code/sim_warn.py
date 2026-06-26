@@ -43,6 +43,7 @@ from sim_comm_llm import MockStrategicPolicy, ReplayPolicy
 from sim_trust import (
     TrustCommWorld, run_off, run_on, elite_gap, trust_in_speaker_kinds, TAU_TRUST,
 )
+from sim_pool import min_count_update
 
 # heed a warning only from a source you yourself still trust at least this much — you
 # believe bad reports from credible peers, ignore them from those you've caught lying.
@@ -78,30 +79,11 @@ class WarnCommWorld(TrustCommWorld):
         return rep
 
     def _social_exchange(self, here):
+        # Warnings-dominate = the K=1 case of the shared evidence-count pooling pass
+        # (one credible lowering report suffices, then min). Vectorized in sim_pool;
+        # behaviour is bit-identical to the prior scalar triple loop.
         for cell in sorted(here):                    # cells are independent; sorted = explicit
-            members = here[cell]
-            if len(members) < 2:
-                continue
-            # freeze reputation vectors so sources report start-of-round values; the
-            # downward min update is itself order-independent, so determinism is robust.
-            snap = {a.oid: dict(self.trust[a.oid]) for a in members}
-            cands = set()
-            for a in members:
-                cands.update(snap[a.oid].keys())     # speakers any present source rates
-            for B in members:
-                tb = self.trust[B.oid]
-                sb = snap[B.oid]
-                for S in sorted(cands):
-                    worst = None
-                    for A in members:
-                        if A.oid == B.oid or S not in snap[A.oid]:
-                            continue
-                        if sb.get(A.oid, 1.0) < TAU_SOURCE:   # heed only sources B still trusts
-                            continue
-                        rep = self._gossip_report(A, S, snap[A.oid][S])
-                        worst = rep if worst is None else min(worst, rep)
-                    if worst is not None and worst < tb.get(S, 1.0):
-                        tb[S] = worst               # warnings only ever LOWER trust
+            min_count_update(self, here[cell], 1, TAU_SOURCE)
 
 
 # --------------------------------------------------------------------------- #
