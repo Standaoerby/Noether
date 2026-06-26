@@ -32,6 +32,7 @@ from sim_comm import DAYS, THINK_EVERY, R, C
 from sim_comm_llm import (
     OllamaPolicy, ClaudePolicy, ReplayPolicy, run_policy, lie_fraction,
 )
+from sim_polariz import deception_modes
 
 
 def parse_args(argv=None):
@@ -139,6 +140,26 @@ def selftest():
     print("\noffline safety holds: unreachable -> raises; garbage -> honest, "
           "logged, never crashes.  ✓")
 
+    # --- 4. deception_modes() on a tiny hand-built log: one of each class ----- #
+    print("\ndeception_modes() three-way split on a hand-built log:")
+    log = EventLog()
+
+    def comm(t, cell, claim_food, true_food):
+        log.emit(t, "communication", "individual", where=cell, actor=0,
+                 data={"cell": list(cell), "claim_food": claim_food,
+                       "true_food": true_food, "truthful": claim_food == true_food,
+                       "heard_by": 1})
+    comm(6, (9, 9), 12.00, 12.00)               # truthful: exact
+    comm(12, (9, 9), 8.00, 7.82)                # soft puffery: real 7.82 -> claim 8.0
+    comm(18, (0, 0), 150.00, 8.00)              # hard diversion: cry OASIS_CAP at a decoy
+    dm = deception_modes(log)
+    assert dm["n"] == 3, dm
+    assert (dm["truthful"], dm["soft"], dm["hard"]) == (1, 1, 1), dm
+    assert abs(dm["truthful_share"] + dm["soft_share"] + dm["hard_share"] - 1.0) < 1e-9
+    print(f"  truthful={dm['truthful']} soft={dm['soft']} hard={dm['hard']} "
+          f"(shares sum to 1.0); soft |err|={dm['mean_abs_e_soft']:.2f}kg, "
+          f"hard |err|={dm['mean_abs_e_hard']:.2f}kg  ✓")
+
 
 # --------------------------------------------------------------------------- #
 #  Reporting (mirrors run_focal_claude.py)                                     #
@@ -170,6 +191,23 @@ def _claims_summary(w, log):
     print(f"\nclaims broadcast: {n}   ·   lie fraction (truthful=False): {frac:.3f}")
     print(f"claims by tier: " + ", ".join(f"{k}={v}" for k, v in sorted(by_policy.items())))
     print(f"audience belief-error (food kg): {w.belief_gap():.1f}")
+
+    # deception modes: the binary `truthful` flag reads ~1.0 for an inflation-style
+    # cohort; split it into soft puffery vs hard diversion (same metric the gate uses).
+    dm = deception_modes(log)
+    cohort_log = EventLog()
+    cohort_log.events = [e for e in comms if e.data.get("policy") == "ollama"]
+    dmc = deception_modes(cohort_log)
+    print(f"\ndeception modes — all claims (n={dm['n']}): "
+          f"truthful {dm['truthful_share']:.3f} · soft/puffery {dm['soft_share']:.3f} "
+          f"· hard/diversion {dm['hard_share']:.3f}")
+    if dmc["n"]:
+        print(f"deception modes — cohort only (n={dmc['n']}): "
+              f"truthful {dmc['truthful_share']:.3f} · soft {dmc['soft_share']:.3f} "
+              f"· hard {dmc['hard_share']:.3f}; "
+              f"mean |err| soft {dmc['mean_abs_e_soft']:.2f}kg / "
+              f"hard {dmc['mean_abs_e_hard']:.2f}kg")
+
     print("\nsample cohort claims (rationale vs outcome):")
     cohort_claims = [e for e in comms if e.data.get("policy") == "ollama"]
     for e in cohort_claims[: min(8, len(cohort_claims))]:
