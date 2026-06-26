@@ -45,6 +45,7 @@ from sim_comm_llm import MockStrategicPolicy, ReplayPolicy
 from sim_trust import (
     TrustCommWorld, run_off, run_on, elite_gap, trust_in_speaker_kinds, TAU_TRUST,
 )
+from sim_pool import min_count_update
 
 TAU_SOURCE = 0.35      # heed a warning only from a source you still trust >= this (= gate τ)
 K_DEFAULT = 2          # distinct credible warners required before a warning sticks
@@ -84,37 +85,12 @@ class EvidenceCommWorld(TrustCommWorld):
         return rep
 
     def _social_exchange(self, here):
-        K = self.k_witness
+        # K-witness, downward-only pooling: a warning sticks only with >= K distinct
+        # credible lowering reports, then trust drops to the worst. Vectorized in
+        # sim_pool (min/count are order-independent); A == S deliberately allowed so
+        # K=1 stays byte-identical to sim_warn. Behaviour identical to the prior loop.
         for cell in sorted(here):                    # cells independent; sorted = explicit
-            members = here[cell]
-            if len(members) < 2:
-                continue
-            snap = {a.oid: dict(self.trust[a.oid]) for a in members}
-            cands = set()
-            for a in members:
-                cands.update(snap[a.oid].keys())     # speakers any present source rates
-            for B in members:
-                sb = snap[B.oid]
-                tb = self.trust[B.oid]
-                for S in sorted(cands):
-                    cur = sb.get(S, 1.0)             # B's snapshotted trust in S
-                    worst = None
-                    w = 0                            # distinct credible warners about S
-                    for A in members:
-                        # A != B and A must hold an opinion on S. (We do NOT exclude
-                        # A == S: sim_warn lets a speaker's own propagated low self-
-                        # reputation act as a witness, and the K=1 ≡ sim_warn anchor
-                        # below requires byte-identical neighborhood semantics.)
-                        if A.oid == B.oid or S not in snap[A.oid]:
-                            continue
-                        if sb.get(A.oid, 1.0) < TAU_SOURCE:    # A credible to B?
-                            continue
-                        report = self._gossip_report(A, S, snap[A.oid][S])
-                        if report < cur:             # a lowering report (a warning)
-                            w += 1
-                            worst = report if worst is None else min(worst, report)
-                    if w >= K and worst is not None:
-                        tb[S] = min(cur, worst)      # corroborated -> warnings dominate
+            min_count_update(self, here[cell], self.k_witness, TAU_SOURCE)
 
 
 # --------------------------------------------------------------------------- #

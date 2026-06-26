@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-26 — vectorize the shared per-cell pooling pass (`sim_pool`) — pure speed, bit-identical
+
+Factored the O(co-located² × candidates) triple loop that `sim_warn` and `sim_evidence` each ran in `_social_exchange` into one shared, numpy-vectorized pass (`sim_pool.py`). **Behaviour-preserving optimization** — every protected fingerprint holds bit-for-bit; no rule, metric, or invariant changed. This is the one authorized reason to touch the locked reputation modules; the verdict is by **output-fingerprint reproduction**, not file byte-identity (their bytes change).
+
+- **`sim_pool.py`** (new, **not** a tower module — not registered in `verify_all.py`): `_gather` takes one snapshot of `world.trust` per cell and builds the shared numpy matrices (member×member trust for credibility, member×candidate reports via `_gossip_report` so the smear/meta hook still applies, opinion mask, current trust); `min_count_update` applies the downward-only K-witness rule (`sim_warn` = K=1, `sim_evidence` = K) vectorized over sources — `min`/distinct-count are order-independent, so the result is exact. `A == S` is allowed, matching `sim_warn`'s neighbourhood semantics (the K=1 ≡ warn anchor depends on it). Snapshot-read / live-write and `sorted(...)` iteration are preserved (hash-independence).
+- **`sim_warn.py`** / **`sim_evidence.py`**: `_social_exchange` is now a one-line call into `sim_pool` (K=1 and `self.k_witness` respectively). Logic identical; files re-verified bit-for-bit.
+- **`sim_gossip.py`**: **unchanged (byte-identical to before)**. Its trust-weighted convex *average* is a sequential, order-dependent SUM; vectorizing it over receivers reproduces the exact bits (verified) but is *slower* than the scalar loop (each source needs its own numpy step rather than one reduction), so — per the WO's guidance — it keeps its scalar fold. The win comes from the two min/count modules.
+- **Headline — wall-time (this machine, standalone `main()` self-runs, seed 7 / 300 d), before → after:**
+  - `sim_warn`   **139.6 s → 49.0 s** (≈ 2.85×)
+  - `sim_evidence` **272.2 s → 90.4 s** (≈ 3.01×)
+  - `sim_gossip`  ~93 s → ~93 s (unchanged)
+  - heavy-trio sum **≈ 505 s → ≈ 232 s** (≈ 2.2×); since `verify_all` runs each module twice, this roughly halves the gate's dominant cost.
+- **All gates hold, bit-exact:** `sim_gossip` `0fa14c92dd4ad258`; `sim_warn` `419b5a4ee5adaff3` + replay-from-log `0769725190f10057`; `sim_evidence` `70726443ebd79057` + replay-from-log `50dae1e8052c2682`; the K=1 ≡ live-`sim_warn` anchor still |Δ| = 0 (gap +0.062453, trust-in-liars 0.201595, mock-honest 0.288835); `matter_drift < 1e-9`; cross-process byte-identical (PYTHONHASHSEED 0 vs 1). Byte-locked modules untouched: `sim_comm` `a91480561b6de937`, `sim_comm_llm` `f353ac30db73b770`, `sim_polariz` `6c4952f66da8326e`, `sim_trust` `6f31f775912f5e96`. `verify_all` stays **17/17**. Pure stdlib + numpy, no new deps.
+
 ## 2026-06-26 — evidence-count gossip (K-witness): tuning the conviction↔slander knob (`sim_evidence`, module 17)
 
 Added module 17, `sim_evidence`, generalizing module-16's warnings-dominate rule with an **evidence threshold K**: a warning about speaker S sticks for receiver B only when at least `K_WITNESS` *distinct credible* sources independently report a lowering opinion of S; then B's trust drops to the worst of them. Gossip still only ever lowers (recovery is personal re-verification). K becomes a tunable dial on the accountability-vs-slander fork module 16 exposed. **No LLM, no endpoint, no RNG, no new dynamics** (touches only auxiliary `trust`; matter conserved). `sim_comm`/`sim_trust`/`sim_gossip`/`sim_warn` are **not edited** — `sim_evidence` is a parallel `TrustCommWorld` subclass.
