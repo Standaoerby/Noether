@@ -20,12 +20,17 @@ theory into deterministic numbers over the four speaking regimes
   4. Rationale-vs-outcome — for the strategic speaker, the aggregate over a whole
      run: what share of claims were deceptive, and the realized elite−audience gap
      those claims bought (one example is printed by `sim_comm_llm`; here, the whole).
+  5. Deception modes — splits the binary `truthful` flag into "soft" lying (puffery:
+     a real cell, padded number) vs "hard" lying (diversion/substitution), so the
+     finding "deception evolves: substitution → diversion → inflation" is quantitative.
+     `deception_modes(log)` is reusable on any log, including a live cohort JSONL.
 
 Everything is deterministic: the underlying runs come from `sim_comm.run` and
 `sim_comm_llm.run_policy(MockStrategicPolicy())`, both seeded; every aggregation
 iterates in sorted order and uses population statistics (ddof=0). `main()` recomputes
 the entire metric set a second time and asserts the two are byte-identical. No API,
-no randomness, pure stdlib + numpy.
+no randomness, pure stdlib + numpy. Current metric fingerprint: 6c4952f66da8326e
+(was ac7fcef400f48656 before metric 5 added its lines).
 """
 
 from __future__ import annotations
@@ -46,6 +51,16 @@ K_CONTESTED = 6        # how many most-disputed cells define the faction axes
 MIN_BELIEVERS = 8      # a cell counts as "contested" only if this many agents weigh in
 EPS_FOOD = 10.0        # kg: stance-bin width — agents within a bin "agree" on a cell
 PROP_WINDOW = 3        # think-days: window for a claim's delayed reach
+
+# --- deception-mode thresholds. These are DEFINITIONS of "soft" vs "hard" lying,
+#     not tuned parameters: a claim is truthful within TOL_ABS of the truth; a lie
+#     is SOFT (puffery) if it inflates a real cell by at most R_SOFT relative, and
+#     HARD (diversion/substitution) otherwise — gross over-claim or under-claim. --- #
+TOL_ABS = 0.05         # kg: |claim-true| within this is "truthful" (covers exact match
+                       # and the 0.01-kg rounding the log applies to claim/true_food)
+R_SOFT = 0.25          # relative over-claim boundary: <=25% inflation of a REAL cell is
+                       # soft puffery; beyond it the claim is a hard diversion lie
+EPS_DM = 1e-9          # guards the relative-error division when true_food == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +203,69 @@ def rationale_outcome(w, log):
 
 
 # --------------------------------------------------------------------------- #
+#  5. Deception modes — separate "soft" puffery from "hard" diversion          #
+# --------------------------------------------------------------------------- #
+def classify_claim(claim_food, true_food):
+    """Classify ONE claim as 'truthful' | 'soft' | 'hard', returning also the signed
+    error `e = claim - true` (kg) and the relative over-claim `r = e/max(true, eps)`.
+
+    The three classes PARTITION every claim:
+      * truthful — `|e| <= TOL_ABS` (includes the old exact-match notion, |e|≈0);
+      * soft (puffery) — a positive, small RELATIVE inflation of a real cell
+        (`e > TOL_ABS` and `r <= R_SOFT`): the cell is genuine, the number is padded
+        (the qwen3:14b cohort's habit: real 7.82 -> claim 8.0);
+      * hard (diversion/substitution) — everything else: gross over-claim
+        (`r > R_SOFT`, e.g. crying OASIS_CAP at a desert decoy) or an under-claim
+        (`e < -TOL_ABS`, understating a real cell to push rivals off it)."""
+    e = claim_food - true_food
+    if abs(e) <= TOL_ABS:
+        return "truthful", e, 0.0
+    r = e / max(true_food, EPS_DM)
+    if e > 0 and r <= R_SOFT:
+        return "soft", e, r
+    return "hard", e, r
+
+
+def deception_modes(log):
+    """Soft-vs-hard deception breakdown over a run's `communication` events. Pure,
+    deterministic, log-only — works on ANY `EventLog` (a scripted/mock run here, or a
+    live cohort log loaded from JSONL). The three shares partition to 1.0."""
+    comms = [ev for ev in log.events if ev.kind == "communication"]
+    n = len(comms)
+    counts = {"truthful": 0, "soft": 0, "hard": 0}
+    r_lies = []                                  # relative over-claim, lies vs REAL cells
+    abs_e = {"soft": [], "hard": []}             # |e| (kg) per lie class
+    for ev in comms:
+        cf = float(ev.data["claim_food"])
+        tf = float(ev.data["true_food"])
+        mode, e, r = classify_claim(cf, tf)
+        counts[mode] += 1
+        if mode != "truthful":
+            abs_e[mode].append(abs(e))
+            # relative over-claim is only defined against a cell with real food; a
+            # hard lie that cries food at an empty/decayed cell (true≈0) is pure
+            # fabrication, not a "relative" inflation, and would blow the mean up via
+            # the eps guard — so it is measured in kg (above), not folded in here.
+            if tf > TOL_ABS:
+                r_lies.append(r)
+
+    def share(k):
+        return counts[k] / n if n else 0.0
+
+    def mean(xs):
+        return float(np.mean(xs)) if xs else 0.0
+
+    return {"n": n,
+            "truthful": counts["truthful"], "soft": counts["soft"],
+            "hard": counts["hard"],
+            "truthful_share": share("truthful"), "soft_share": share("soft"),
+            "hard_share": share("hard"),
+            "mean_r_lies": mean(r_lies),
+            "mean_abs_e_soft": mean(abs_e["soft"]),
+            "mean_abs_e_hard": mean(abs_e["hard"])}
+
+
+# --------------------------------------------------------------------------- #
 #  Compute everything + a fingerprint for the determinism self-check           #
 # --------------------------------------------------------------------------- #
 def compute_all():
@@ -199,7 +277,8 @@ def compute_all():
         out[r] = {"live": len(live),
                   "pol": polarization(w, live),
                   "fac": factions(w, live),
-                  "prop": propagation(log)}
+                  "prop": propagation(log),
+                  "dec": deception_modes(log)}
     out["mock-strategic"]["rat"] = rationale_outcome(*runs["mock-strategic"])
     return out
 
@@ -217,6 +296,10 @@ def fingerprint(results):
         h.update((";".join(f"{c}" for c in f["cells"])).encode())
         p = d["prop"]
         h.update(f"prop{p['n']}/{p['immediate']:.6f}/{p['windowed']:.6f}".encode())
+        dm = d["dec"]
+        h.update(f"dec{dm['n']}/{dm['truthful']}/{dm['soft']}/{dm['hard']}/"
+                 f"{dm['mean_r_lies']:.6f}/{dm['mean_abs_e_soft']:.6f}/"
+                 f"{dm['mean_abs_e_hard']:.6f}".encode())
         if "rat" in d and d["rat"] is not None:
             t = d["rat"]
             h.update(f"rat{t['lie_frac']:.6f}/{t['n']}/{t['heard_lie']:.6f}/"
@@ -260,6 +343,23 @@ def main():
     row("  claims logged", lambda d: d["prop"]["n"], "{:d}")
     row("  mean listeners / claim", lambda d: d["prop"]["immediate"])
     row(f"  exposure within {PROP_WINDOW} think-days", lambda d: d["prop"]["windowed"])
+    print(f"DECEPTION MODES (truthful≤{TOL_ABS:g}kg · soft puffery r≤{R_SOFT:g} · "
+          f"hard diversion)")
+    row("  truthful share", lambda d: d["dec"]["truthful_share"])
+    row("  soft-lie share (puffery)", lambda d: d["dec"]["soft_share"])
+    row("  hard-lie share (diversion)", lambda d: d["dec"]["hard_share"])
+    row("  mean rel over-claim (vs real)", lambda d: d["dec"]["mean_r_lies"])
+    row("  mean |err| soft (kg)", lambda d: d["dec"]["mean_abs_e_soft"])
+    row("  mean |err| hard (kg)", lambda d: d["dec"]["mean_abs_e_hard"])
+
+    # the three shares partition every claim -> they must sum to 1 per regime
+    for r in REGIMES:
+        dm = res[r]["dec"]
+        if dm["n"]:
+            s = dm["truthful_share"] + dm["soft_share"] + dm["hard_share"]
+            assert abs(s - 1.0) < 1e-9, f"{r}: deception modes do not partition ({s})"
+            assert dm["truthful"] + dm["soft"] + dm["hard"] == dm["n"], \
+                f"{r}: deception-mode counts do not sum to n"
 
     rat = res["mock-strategic"]["rat"]
     print("\nRATIONALE vs OUTCOME (mock-strategic, whole run)")
