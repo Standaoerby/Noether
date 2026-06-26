@@ -320,16 +320,23 @@ def main():
     print(f"\n{line}")
     for r in ("deceptive", "mock-strategic"):
         d = res[r]
-        shrink = d["gap_off"] - d["gap_on"]
+        shrink = d["gap_off"] - d["gap_on"]          # OFF - ON: positive = accountability shrank the gap
         pct = (shrink / d["gap_off"] * 100.0) if abs(d["gap_off"]) > 1e-9 else float("nan")
         still = "still ahead" if d["gap_on"] > 1e-3 else "neutralised"
+        if shrink > 0.01:
+            change = f"shrinks {shrink:.3f}, {_fmt(pct, '{:.0f}')}%"
+        elif shrink < -0.01:
+            change = f"grows {-shrink:.3f}, {_fmt(-pct, '{:.0f}')}%"
+        else:
+            change = f"≈ unchanged (Δ{d['gap_on'] - d['gap_off']:+.3f})"
         print(f"{r}: capture gap {d['gap_off']:+.3f} -> {d['gap_on']:+.3f} kg "
-              f"(shrinks {shrink:+.3f}, {_fmt(pct, '{:.0f}')}%); elite {still} under trust.")
+              f"({change}); elite {still} under trust.")
     hon = res["honest"]["gap_on"]
     print(f"honest under trust: capture gap {hon:+.3f} kg — honesty "
           f"{'competitive again' if hon >= -1e-3 else 'still ≈ silence'}.")
-    print("accountability shrinks the liar's capture but, being local and lagged, does")
-    print(f"not erase it — the residual is the finding. deterministic from seed {SEED}  ✓")
+    print("accountability bites the strategic liar but barely the indiscriminate one;")
+    print("being local and lagged, it does not erase capture — the asymmetry is the "
+          f"finding. deterministic from seed {SEED}  ✓")
 
 
 if __name__ == "__main__":
