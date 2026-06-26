@@ -228,6 +228,23 @@ class CommWorld:
             claim = OASIS_CAP
         return Claim(B, claim, self.regime == "honest", {})
 
+    # ---- the listener seam ------------------------------------------------ #
+    def _absorb_claim(self, L, B, claim, true_B, spk):
+        """Listener L folds speaker spk's claim about remote cell B into belief.
+
+        Default = naive trust (unconditional): the claim becomes L's belief about B,
+        and B is tracked in `from_hearsay` iff the claim is false. This is the only
+        place a heard claim enters a listener's memory, so sim_trust can subclass
+        CommWorld and override just this method to weight absorption by the speaker's
+        reputation — without touching the conserved dynamics. Behaviour-preserving:
+        identical to the prior inline `# naive trust about a remote cell` loop body."""
+        if B == (L.i, L.j):
+            return
+        self.mem[L.oid][B] = (claim, self.t)
+        if abs(claim - true_B) > 1e-9:
+            self.from_hearsay[L.oid].add(B)
+        else:
+            self.from_hearsay[L.oid].discard(B)
 
     def step(self):
         self.t += 1
@@ -314,13 +331,7 @@ class CommWorld:
                         self.log.emit(self.t, "communication", "individual",
                                       where=(i, j), actor=spk.oid, data=data)
                         for L in listeners:               # naive trust about a remote cell
-                            if B == (L.i, L.j):
-                                continue
-                            self.mem[L.oid][B] = (claim, self.t)
-                            if abs(claim - true_B) > 1e-9:
-                                self.from_hearsay[L.oid].add(B)
-                            else:
-                                self.from_hearsay[L.oid].discard(B)
+                            self._absorb_claim(L, B, claim, true_B, spk)
 
             for a in self.pop:                          # sensation overrides hearsay
                 self._observe(a)
