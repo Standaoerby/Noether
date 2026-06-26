@@ -32,6 +32,7 @@ The tower, bottom to top:
   sim_trust     trust-weighting               : accountable listeners; does reputation break the lie equilibrium
   sim_gossip    shared reputation / gossip    : pooled reputation captured by the credulous majority; reputation capture
   sim_warn      warnings-dominate gossip      : propagating distrust pins the liar — and weaponizes slander
+  sim_evidence  evidence-count gossip (K-witness): K dials conviction↔slander; K=1 ≡ sim_warn
 
 Run:  python3 verify_all.py
 """
@@ -59,6 +60,7 @@ MODULES = [
     ("sim_trust",     "trust-weighting: accountable listeners vs the lie equilibrium"),
     ("sim_gossip",    "shared reputation: pooled gossip captured by the credulous majority"),
     ("sim_warn",      "warnings-dominate gossip: pins the liar, but weaponizes slander"),
+    ("sim_evidence",  "evidence-count gossip (K-witness): K dials conviction vs slander"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
