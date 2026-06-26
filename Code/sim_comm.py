@@ -246,6 +246,15 @@ class CommWorld:
         else:
             self.from_hearsay[L.oid].discard(B)
 
+    # ---- the social-exchange seam ----------------------------------------- #
+    def _social_exchange(self, here):
+        """Co-located agents exchange information beyond foraging claims, once per
+        think-day after sensation. Default: no-op (sim_comm has no social layer).
+        sim_gossip overrides this to pool per-speaker reputation among neighbours —
+        without touching the conserved dynamics. `here` is the think-day's
+        {cell: [agents]} co-location map."""
+        return
+
     def step(self):
         self.t += 1
         rng = self.rng
@@ -335,6 +344,8 @@ class CommWorld:
 
             for a in self.pop:                          # sensation overrides hearsay
                 self._observe(a)
+
+            self._social_exchange(here)                 # neighbours pool reputation (no-op here)
 
             for a in self.pop:                          # cognition + migration
                 legal = legal_dirs(a.i, a.j)
