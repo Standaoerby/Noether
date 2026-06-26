@@ -33,6 +33,7 @@ The tower, bottom to top:
   sim_gossip    shared reputation / gossip    : pooled reputation captured by the credulous majority; reputation capture
   sim_warn      warnings-dominate gossip      : propagating distrust pins the liar — and weaponizes slander
   sim_evidence  evidence-count gossip (K-witness): K dials conviction↔slander; K=1 ≡ sim_warn
+  sim_stake     existential stake             : death as a motive — survival pressure modulates the lie
 
 Run:  python3 verify_all.py
 """
@@ -61,6 +62,7 @@ MODULES = [
     ("sim_gossip",    "shared reputation: pooled gossip captured by the credulous majority"),
     ("sim_warn",      "warnings-dominate gossip: pins the liar, but weaponizes slander"),
     ("sim_evidence",  "evidence-count gossip (K-witness): K dials conviction vs slander"),
+    ("sim_stake",     "existential stake: death as a motive — survival pressure modulates the lie"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
