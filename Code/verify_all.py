@@ -31,6 +31,7 @@ The tower, bottom to top:
   sim_polariz   polarization & factions        : empirical elite-theory metrics on divergent beliefs
   sim_trust     trust-weighting               : accountable listeners; does reputation break the lie equilibrium
   sim_gossip    shared reputation / gossip    : pooled reputation captured by the credulous majority; reputation capture
+  sim_warn      warnings-dominate gossip      : propagating distrust pins the liar — and weaponizes slander
 
 Run:  python3 verify_all.py
 """
@@ -57,6 +58,7 @@ MODULES = [
     ("sim_polariz",   "polarization, factions, propagation: empirical elite-theory metrics"),
     ("sim_trust",     "trust-weighting: accountable listeners vs the lie equilibrium"),
     ("sim_gossip",    "shared reputation: pooled gossip captured by the credulous majority"),
+    ("sim_warn",      "warnings-dominate gossip: pins the liar, but weaponizes slander"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
