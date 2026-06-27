@@ -34,6 +34,7 @@ The tower, bottom to top:
   sim_warn      warnings-dominate gossip      : propagating distrust pins the liar — and weaponizes slander
   sim_evidence  evidence-count gossip (K-witness): K dials conviction↔slander; K=1 ≡ sim_warn
   sim_stake     existential stake             : death as a motive — survival pressure modulates the lie
+  sim_coalition collective sanction           : a quorum silences a target's voice — the first joint political verb
 
 Run:  python3 verify_all.py
 """
@@ -63,6 +64,7 @@ MODULES = [
     ("sim_warn",      "warnings-dominate gossip: pins the liar, but weaponizes slander"),
     ("sim_evidence",  "evidence-count gossip (K-witness): K dials conviction vs slander"),
     ("sim_stake",     "existential stake: death as a motive — survival pressure modulates the lie"),
+    ("sim_coalition", "collective sanction: a quorum silences a target's voice (the first joint political verb)"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
