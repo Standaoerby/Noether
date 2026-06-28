@@ -36,6 +36,7 @@ The tower, bottom to top:
   sim_stake     existential stake             : death as a motive — survival pressure modulates the lie
   sim_coalition collective sanction           : a quorum silences a target's voice — the first joint political verb
   sim_sphere    the observer                  : local materialization + attention budget + info lag (embodied substrate)
+  sim_salience  exogenous salience injection  : push another agent's agenda — crowd-out harm, mass-not-few concentration
 
 Run:  python3 verify_all.py
 """
@@ -67,6 +68,7 @@ MODULES = [
     ("sim_stake",     "existential stake: death as a motive — survival pressure modulates the lie"),
     ("sim_coalition", "collective sanction: a quorum silences a target's voice (the first joint political verb)"),
     ("sim_sphere",    "the observer: local materialization + attention budget + information lag"),
+    ("sim_salience",  "exogenous salience injection: push another agent's agenda (crowd-out harm)"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
