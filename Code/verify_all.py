@@ -35,6 +35,7 @@ The tower, bottom to top:
   sim_evidence  evidence-count gossip (K-witness): K dials conviction↔slander; K=1 ≡ sim_warn
   sim_stake     existential stake             : death as a motive — survival pressure modulates the lie
   sim_coalition collective sanction           : a quorum silences a target's voice — the first joint political verb
+  sim_sphere    the observer                  : local materialization + attention budget + info lag (embodied substrate)
 
 Run:  python3 verify_all.py
 """
@@ -65,6 +66,7 @@ MODULES = [
     ("sim_evidence",  "evidence-count gossip (K-witness): K dials conviction vs slander"),
     ("sim_stake",     "existential stake: death as a motive — survival pressure modulates the lie"),
     ("sim_coalition", "collective sanction: a quorum silences a target's voice (the first joint political verb)"),
+    ("sim_sphere",    "the observer: local materialization + attention budget + information lag"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
