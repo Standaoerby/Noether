@@ -37,6 +37,7 @@ The tower, bottom to top:
   sim_coalition collective sanction           : a quorum silences a target's voice — the first joint political verb
   sim_sphere    the observer                  : local materialization + attention budget + info lag (embodied substrate)
   sim_salience  exogenous salience injection  : push another agent's agenda — crowd-out harm, mass-not-few concentration
+  sim_enclosure the bounded arena              : close spatial escape — confinement concentrates geometrically, capture still NULLs
 
 Run:  python3 verify_all.py
 """
@@ -69,6 +70,7 @@ MODULES = [
     ("sim_coalition", "collective sanction: a quorum silences a target's voice (the first joint political verb)"),
     ("sim_sphere",    "the observer: local materialization + attention budget + information lag"),
     ("sim_salience",  "exogenous salience injection: push another agent's agenda (crowd-out harm)"),
+    ("sim_enclosure", "the bounded arena: close spatial escape — confinement concentrates, capture NULLs"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
