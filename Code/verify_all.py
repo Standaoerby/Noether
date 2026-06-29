@@ -40,6 +40,7 @@ The tower, bottom to top:
   sim_enclosure the bounded arena              : close spatial escape — confinement concentrates geometrically, capture still NULLs
   sim_appropriation the appropriable resource  : owner takes rent — the first transfer that builds a wealth stratum (hierarchy at last)
   sim_institution the protector institution    : tax owners to fund a guard caste — challenge suppressed, but the guards capture the surplus
+  sim_inheritance heritable property            : ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)
 
 Run:  python3 verify_all.py
 """
@@ -75,6 +76,7 @@ MODULES = [
     ("sim_enclosure", "the bounded arena: close spatial escape — confinement concentrates, capture NULLs"),
     ("sim_appropriation", "the appropriable resource: owner takes rent — first transfer to build a wealth stratum"),
     ("sim_institution", "the protector institution: tax owners to fund a guard caste — challenge suppressed, guards capture the surplus"),
+    ("sim_inheritance", "heritable property: ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
