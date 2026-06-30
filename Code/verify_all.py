@@ -41,6 +41,7 @@ The tower, bottom to top:
   sim_appropriation the appropriable resource  : owner takes rent — the first transfer that builds a wealth stratum (hierarchy at last)
   sim_institution the protector institution    : tax owners to fund a guard caste — challenge suppressed, but the guards capture the surplus
   sim_inheritance heritable property            : ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)
+  sim_exclusion denial of access                : owner bars non-owners from its cell — no capacity collapse, but no extra stratification either
 
 Run:  python3 verify_all.py
 """
@@ -77,6 +78,7 @@ MODULES = [
     ("sim_appropriation", "the appropriable resource: owner takes rent — first transfer to build a wealth stratum"),
     ("sim_institution", "the protector institution: tax owners to fund a guard caste — challenge suppressed, guards capture the surplus"),
     ("sim_inheritance", "heritable property: ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)"),
+    ("sim_exclusion", "denial of access: owner bars non-owners from its cell — no collapse, but no extra stratification"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
