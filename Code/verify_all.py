@@ -42,6 +42,8 @@ The tower, bottom to top:
   sim_institution the protector institution    : tax owners to fund a guard caste — challenge suppressed, but the guards capture the surplus
   sim_inheritance heritable property            : ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)
   sim_exclusion denial of access                : owner bars non-owners from its cell — no capacity collapse, but no extra stratification either
+  sim_trade ownership traded between living     : richest buyer buys a deed from its holder — market vs gift: does liquidity concentrate or equalize?
+  sim_synthesis the keystone                     : inheritance x exclusion x trade at once — do the three property verbs compound, or interfere?
 
 Run:  python3 verify_all.py
 """
@@ -79,6 +81,8 @@ MODULES = [
     ("sim_institution", "the protector institution: tax owners to fund a guard caste — challenge suppressed, guards capture the surplus"),
     ("sim_inheritance", "heritable property: ownership passes to a bloodline heir — land concentrates into fewer, older houses (dynasties)"),
     ("sim_exclusion", "denial of access: owner bars non-owners from its cell — no collapse, but no extra stratification"),
+    ("sim_trade", "ownership traded between the living: richest buyer buys a deed — market vs gift, does liquidity concentrate or equalize?"),
+    ("sim_synthesis", "the keystone: inheritance x exclusion x trade at once — do the three property verbs compound, or interfere?"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
