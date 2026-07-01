@@ -50,7 +50,7 @@ from sim_sphere import GRID_DIAG, CANON_COMM
 from sim_salience import RAD, KK, LAG, FEW, W_INJ, AMT
 from sim_appropriation import appropriation_fingerprint, ownership_metrics, RHO, BOX
 from sim_institution import APPROP_FP
-from sim_trade import TradeWorld, trade_fingerprint, PRICE_FRAC
+from sim_trade import TradeWorld, PRICE_FRAC
 
 SEEDS = (7, 8, 9, 10, 11)               # the 5-seed sweep for the main cross-product
 
@@ -110,14 +110,17 @@ def run_synthesis(heritable=False, heir_fallback="revert",
     return w, log
 
 
-def synthesis_fingerprint(w):
-    """Compose the parent (trade) fingerprint with the two remaining verbs' flags, counters,
-    and owning-house set, then the sorted deed ledger — a full digest of all three seams."""
+def synth_fingerprint(w):
+    """Canonical module-28 digest (verbatim from the delivery log): the state fingerprint,
+    then the two normally-off verb flags/counters, then the sorted deed ledger. It composes
+    on state_fingerprint (not the parent verb fp), so all-off reduces cleanly to the canon."""
     h = hashlib.sha256()
-    h.update(trade_fingerprint(w).encode())
-    h.update((f"|herit{int(w.heritable)}|{w.heir_fallback}"
-              f"|excl{int(w.exclusion)}|{w.exclude_mode}|exmoves{w._excluded_moves}"
-              f"|houses{sorted({w.house(o) for o in w._cell_owner.values()})}").encode())
+    h.update(w.state_fingerprint().encode())
+    h.update((f"|H{int(getattr(w, 'heritable', False))}"
+              f"|X{int(w.exclusion)}:{w.exclude_mode}"
+              f"|T{int(w.trade)}:{w.trade_mode}"
+              f"|traded{w._traded}|excl{w._excluded_moves}"
+              f"|cells{len(w._cell_owner)}").encode())
     for cell, oid in sorted(w._cell_owner.items()):
         h.update(f"{cell[0]},{cell[1]}={oid}".encode())
     return h.hexdigest()[:16]
@@ -222,17 +225,17 @@ def main():
     # --- self-check fingerprint (in-process; verify_all adds cross-process) --- #
     wf, _ = run_synthesis(heritable=True, exclusion=True, exclude_mode="occupied",
                           trade=True, trade_mode="market", owner_policy="claim",
-                          arena_side=BOX, injection_strength=0.0, injectors=0)
-    fp1 = synthesis_fingerprint(wf)
+                          arena_side=BOX, injection_strength=0.0, injectors=0, seed=SEED)
+    f1 = synth_fingerprint(wf)
     wf2, _ = run_synthesis(heritable=True, exclusion=True, exclude_mode="occupied",
                            trade=True, trade_mode="market", owner_policy="claim",
-                           arena_side=BOX, injection_strength=0.0, injectors=0)
-    fp2 = synthesis_fingerprint(wf2)
+                           arena_side=BOX, injection_strength=0.0, injectors=0, seed=SEED)
+    f2 = synth_fingerprint(wf2)
     max_drift = max(max_drift, wf.matter_drift())
-    print(f"\nSYNTHESIS_FINGERPRINT (h+x+t, claim, box{BOX}): {fp1}")
-    print(f"self-check (recompute): {fp2} -> "
-          f"{'BIT-IDENTICAL ✓' if fp1 == fp2 else 'MISMATCH ✗'}")
-    assert fp1 == fp2, "synthesis run is not reproducible"
+    print(f"\nSYNTH_FINGERPRINT (HXT box{BOX}, seed {SEED}): {f1}")
+    print(f"self-check (recompute): {f2} -> "
+          f"{'BIT-IDENTICAL ✓' if f1 == f2 else 'MISMATCH ✗'}")
+    assert f1 == f2, "synthesis run is not reproducible"
     print(f"max matter drift across battery: {max_drift:.2e} kg")
     assert max_drift < 1e-9, "a config leaked matter"
 
