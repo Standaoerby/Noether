@@ -4,7 +4,31 @@
 
 "use strict";
 
-const RUNS = { baseline: "appropriation_baseline", headline: "appropriation_headline" };
+const runsFor = (w) => ({ baseline: `${w}_baseline`, headline: `${w}_headline` });
+
+/* per-world contrast text (two-register titles adapt to the selected world) */
+const WORLD_META = {
+  appropriation: {
+    left: ["без собственности", "ρ=0"],
+    right: ["с собственностью", "ρ=0.5 · перенос тело→тело"],
+    sub: "Разница только в одном: слева собственности нет, справа она включена.",
+  },
+  institution: {
+    left: ["собственность, институт выключен", "σ=0"],
+    right: ["собственность + институт-страж", "σ=0.5 · налог и стража"],
+    sub: "У обоих есть собственность. Справа добавлен институт: владельцев облагают налогом, стража давит вызовы владению.",
+  },
+  inheritance: {
+    left: ["собственность без наследования", "наследование выкл."],
+    right: ["собственность + наследование", "клетки переходят наследнику"],
+    sub: "У обоих есть собственность. Справа клетки умершего владельца переходят живому наследнику того же дома.",
+  },
+  trade: {
+    left: ["собственность без рынка", "рынок выкл."],
+    right: ["собственность + рынок", "богатый выкупает купчие · цена 0.25"],
+    sub: "У обоих есть собственность. Справа включён рынок: самый богатый живой агент выкупает купчие у держателей.",
+  },
+};
 const CHARTS = [
   { id: "chart-share", key: "ownerShare", pct: true },
   { id: "chart-alive", key: "alive" },
@@ -16,8 +40,8 @@ const state = {
   baseline: null, headline: null,
   gridR: 14, gridC: 14, tMin: 1, tMax: 300,
   maxPlant: 1e-9, maxBody: 1e-9,
-  layers: { food: true, bodies: true, owner: true, traj: false },
-  speed: 4, playing: false, timer: null,
+  layers: { food: true, bodies: true, owner: true, traj: false, flow: false },
+  speed: 4, playing: false, timer: null, world: "appropriation",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -60,6 +84,7 @@ function buildSeries(frames) {
 }
 
 function computeScales() {
+  state.maxPlant = 1e-9; state.maxBody = 1e-9;     // reset (world switch recomputes from scratch)
   for (const run of [state.baseline, state.headline]) {
     for (const f of run.frames) {
       for (const row of f.plant) for (const v of row) if (v > state.maxPlant) state.maxPlant = v;
@@ -135,6 +160,16 @@ function renderFrame(frame, canvas, meta) {
       ctx.fill();
       if (isOwner) { ctx.lineWidth = 1.5; ctx.strokeStyle = "#f4c542"; ctx.stroke(); }
     }
+  }
+
+  // turnover flow: green flash on births, red flash on deaths (this snapped day)
+  if (state.layers.flow) {
+    const flash = (i, j, color) => {
+      ctx.beginPath(); ctx.arc((j + 0.5) * cw, (i + 0.5) * ch, cw * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.fill();
+    };
+    for (const b of (frame.births || [])) flash(b[1], b[2], "rgba(60,230,110,0.55)");  // [oid,i,j]
+    for (const d of (frame.deaths || [])) flash(d[0], d[1], "rgba(240,70,70,0.50)");   // [i,j]
   }
 }
 
@@ -226,6 +261,7 @@ function updateSummary(t) {
 
 /* -------------------------------------------------------------------- draw */
 function draw(t) {
+  if (!state.baseline || !state.headline) return;   // not loaded yet
   $("day").textContent = t;
   renderFrame(state.baseline.byT[t], $("cv-baseline"), state.baseline.meta);
   renderFrame(state.headline.byT[t], $("cv-headline"), state.headline.meta);
@@ -285,10 +321,12 @@ function wireControls() {
     if (state.playing) scheduleTimer();          // apply new speed immediately
   });
 
-  const map = { "ly-food": "food", "ly-bodies": "bodies", "ly-owner": "owner", "ly-traj": "traj" };
+  const map = { "ly-food": "food", "ly-bodies": "bodies", "ly-owner": "owner", "ly-traj": "traj", "ly-flow": "flow" };
   for (const [id, k] of Object.entries(map)) {
     $(id).addEventListener("change", (e) => { state.layers[k] = e.target.checked; draw(parseInt(scrub.value, 10)); });
   }
+
+  $("world").addEventListener("change", (e) => { stopPlay(); loadWorld(e.target.value); });
 
   const help = $("help-btn"), legend = $("legend");
   help.addEventListener("click", () => {
@@ -303,28 +341,41 @@ function wireControls() {
   }
 }
 
-/* -------------------------------------------------------------------- main */
-async function main() {
-  try {
-    setStatus("загрузка прогонов…");
-    const runs = await getJSON("/runs");
-    const names = new Set(runs.map((r) => r.name));
-    if (!names.has(RUNS.baseline) || !names.has(RUNS.headline))
-      throw new Error(`ожидались ${RUNS.baseline} и ${RUNS.headline}; получено [${[...names].join(", ")}]`);
+/* ------------------------------------------------------------- world switch */
+function applyWorldMeta(w) {
+  const wm = WORLD_META[w]; if (!wm) return;
+  $("left-title").textContent = wm.left[0]; $("left-cfg").textContent = wm.left[1];
+  $("right-title").textContent = wm.right[0]; $("right-cfg").textContent = wm.right[1];
+  $("contrast-sub").textContent = wm.sub;
+  $("world-hint").textContent = "слева — контроль, справа — тот же мир с включённым механизмом";
+}
 
-    setStatus("предзагрузка кадров…");
-    [state.baseline, state.headline] = await Promise.all([loadRun(RUNS.baseline), loadRun(RUNS.headline)]);
-    const m = state.headline.meta;
+async function loadWorld(w) {
+  try {
+    state.world = w;
+    const r = runsFor(w);
+    setStatus(`загрузка «${w}»…`);
+    const [bl, hl] = await Promise.all([loadRun(r.baseline), loadRun(r.headline)]);
+    state.baseline = bl; state.headline = hl;
+    const m = hl.meta;
     state.gridR = m.R || 14; state.gridC = m.C || 14; state.tMin = m.t_min; state.tMax = m.t_max;
     computeScales();
-    wireControls();
+    applyWorldMeta(w);
+    const scrub = $("scrub");
+    scrub.min = state.tMin; scrub.max = state.tMax; scrub.value = state.tMin;
     draw(state.tMin);
-    setStatus(`готово — по 300 кадров на прогон, дни ${state.tMin}–${state.tMax}. ` +
-      `Нажми ▶ или тяни ползунок: справа класс собственников появляется из ничего, слева — никогда.`);
+    setStatus(`готово — «${w}», по ${hl.frames.length} кадра на прогон, дни ${state.tMin}–${state.tMax}. ` +
+      `Тяни ползунок или жми ▶; переключай мир в списке выше.`);
   } catch (err) {
-    setStatus("ошибка: " + err.message + " — сначала запусти capture.py (headline + baseline)?");
+    setStatus(`ошибка загрузки «${w}»: ${err.message} — прогонял ли ты capture.py для этого мира?`);
     console.error(err);
   }
+}
+
+/* -------------------------------------------------------------------- main */
+async function main() {
+  wireControls();
+  await loadWorld($("world").value || state.world);
 }
 
 main();

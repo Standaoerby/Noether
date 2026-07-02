@@ -12,7 +12,7 @@
       <div>
         <h1>Как из ничего рождается класс собственников</h1>
         <p class="sub">Один и тот же мир, один и тот же случай. День&nbsp;<span id="day">1</span>&nbsp;из&nbsp;300.
-          Разница только в одном: слева собственности нет, справа она включена.</p>
+          <span id="contrast-sub">Разница только в одном: слева собственности нет, справа она включена.</span></p>
       </div>
       <button id="help-btn" class="help-btn" aria-expanded="false">? Как читать</button>
     </div>
@@ -25,6 +25,7 @@
         <li><span class="swatch owner"></span> <b>жёлтая рамка клетки</b> — эта клетка кому-то принадлежит.</li>
         <li><span class="swatch food"></span> <b>зелёная заливка</b> — еда (ярче = больше). Оазисы кормят мир.</li>
         <li><span class="swatch line"></span> <b>линии</b> — пути, по которым агенты ходили («пути агентов»).</li>
+        <li><span class="dot birth"></span> <b>зелёная вспышка</b> / <span class="dot death"></span> <b>красная</b> — рождение / смерть за этот день (слой «оборот»). Насос жизни: у сытых владельцев рождений больше.</li>
         <li>Слева собственность <b>выключена</b> — сравнение с миром, где её нет.</li>
         <li><b>Что смотреть:</b> справа масса стекается к немногим (клетки желтеют, владельцы жиреют) и живых становится меньше. Слева все живут ровно и никто не растёт.</li>
       </ul>
@@ -42,7 +43,7 @@
     <div class="delta" id="plq-alive"><span class="k">сколько живых</span><span class="v">—</span></div>
     <div class="delta" id="plq-mass"><span class="k">всего живой массы</span><span class="v">—</span></div>
     <div class="delta" id="plq-share"><span class="k">доля у владельцев</span><span class="v">—</span></div>
-    <p class="plaque-note">одна и та же арена и случайность — разница только в том, включён ли перенос собственности.</p>
+    <p class="plaque-note">одна и та же арена и один и тот же случай — разница только в механизме, включённом справа.</p>
   </section>
 
   <!-- B. Play + speed, slider, layer toggles -->
@@ -58,17 +59,30 @@
       <label><input type="checkbox" id="ly-bodies" checked /> тела</label>
       <label><input type="checkbox" id="ly-owner" checked /> владение</label>
       <label><input type="checkbox" id="ly-traj" /> пути агентов</label>
+      <label><input type="checkbox" id="ly-flow" /> оборот</label>
     </div>
+  </section>
+
+  <section id="gallery-bar">
+    <label>мир из башни:
+      <select id="world">
+        <option value="appropriation">присвоение (23)</option>
+        <option value="institution">институт (24)</option>
+        <option value="inheritance">наследование (25)</option>
+        <option value="trade">рынок (27)</option>
+      </select>
+    </label>
+    <span id="world-hint" class="world-hint"></span>
   </section>
 
   <section id="panels">
     <figure class="panel">
-      <figcaption title="claim, box6, salience off">Мир <b>без собственности</b> <span class="cfg">ρ=0</span></figcaption>
+      <figcaption title="claim, box6, salience off">Мир <b id="left-title">без собственности</b> <span class="cfg" id="left-cfg">ρ=0</span></figcaption>
       <canvas id="cv-baseline" width="560" height="560"></canvas>
       <div class="readout" id="ro-baseline"></div>
     </figure>
     <figure class="panel">
-      <figcaption title="claim, box6, salience off">Мир <b>с собственностью</b> <span class="cfg">ρ=0.5 · перенос тело→тело</span></figcaption>
+      <figcaption title="claim, box6, salience off">Мир <b id="right-title">с собственностью</b> <span class="cfg" id="right-cfg">ρ=0.5 · перенос тело→тело</span></figcaption>
       <canvas id="cv-headline" width="560" height="560"></canvas>
       <div class="readout" id="ro-headline"></div>
     </figure>
