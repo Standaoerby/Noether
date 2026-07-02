@@ -1,0 +1,4 @@
+# viz/ extra deps (numpy is already required by the canon; see ../requirements.txt).
+# PR-1 (capture) needs nothing beyond the canon. These are for PR-2 (the web viewer).
+fastapi
+uvicorn
