@@ -32,6 +32,9 @@ from sim_sphere import GRID_DIAG, CANON_COMM                     # noqa: E402
 from sim_appropriation import (                                  # noqa: E402
     run_appropriation, appropriation_fingerprint, ownership_metrics,
 )
+from sim_institution import run_institution, institution_fingerprint      # noqa: E402
+from sim_inheritance import run_inheritance, inheritance_fingerprint      # noqa: E402
+from sim_trade import run_trade, trade_fingerprint                        # noqa: E402
 
 from schema import frame_from_world, frames_to_jsonl, meta       # noqa: E402
 import json                                                      # noqa: E402
@@ -50,10 +53,47 @@ WORLDS = {
                     radius=GRID_DIAG + 1.0, K=None, lag=0,
                     injection_strength=0.0, injectors=0, arena_side=None),
         "B0_anchor": CANON_COMM,                  # "a91480561b6de937"
+        "B0_guard": lambda w: w._appropriated_total == 0.0,
         "headline": dict(appropriation=0.5, owner_policy="claim", arena_side=6,
                          injection_strength=0.0, injectors=0),   # rho=0.5 claim, box6, sal off
         "baseline": dict(appropriation=0.0, owner_policy="claim", arena_side=6,
                          injection_strength=0.0, injectors=0),   # rho=0 control, SAME arena/seed
+    },
+    # NOTE: the three B0 dicts below add the sphere/salience-off overrides
+    # (radius=GRID_DIAG+1.0, K=None, lag=0, injection_strength=0, injectors=0) that reduce
+    # each world to the bare comm canon a91480561b6de937 — exactly as each module's own
+    # main() B0 test does. The WO spec omitted them (only the appropriation entry had them);
+    # without them the world runs sphere-ON and B0 lands on e4c51990853eea93 instead.
+    "institution": {
+        "run": run_institution, "fp": institution_fingerprint,
+        "B0": dict(sigma=0.0, enforce=False, appropriation=0.0, owner_policy="founders",
+                   arena_side=None, radius=GRID_DIAG + 1.0, K=None, lag=0,
+                   injection_strength=0.0, injectors=0),
+        "B0_anchor": CANON_COMM,                   # "a91480561b6de937"
+        "B0_guard": lambda w: w._levy_total == 0.0,
+        "headline": dict(sigma=0.5, enforce=True, owner_policy="claim", arena_side=6),
+        "baseline": dict(sigma=0.0, enforce=False, appropriation=0.5,
+                         owner_policy="claim", arena_side=6),   # appropriation ON, institution OFF
+    },
+    "inheritance": {
+        "run": run_inheritance, "fp": inheritance_fingerprint,
+        "B0": dict(heritable=False, sigma=0.0, enforce=False, appropriation=0.0,
+                   owner_policy="founders", arena_side=None, radius=GRID_DIAG + 1.0, K=None,
+                   lag=0, injection_strength=0.0, injectors=0),
+        "B0_anchor": CANON_COMM,
+        "B0_guard": lambda w: not w._house,
+        "headline": dict(heritable=True, appropriation=0.5, owner_policy="claim", arena_side=6),
+        "baseline": dict(heritable=False, appropriation=0.5, owner_policy="claim", arena_side=6),
+    },
+    "trade": {
+        "run": run_trade, "fp": trade_fingerprint,
+        "B0": dict(trade=False, appropriation=0.0, owner_policy="founders", arena_side=None,
+                   radius=GRID_DIAG + 1.0, K=None, lag=0, injection_strength=0.0, injectors=0),
+        "B0_anchor": CANON_COMM,
+        "B0_guard": lambda w: w._traded == 0,
+        "headline": dict(trade=True, trade_mode="market", price_frac=0.25,
+                         appropriation=0.5, owner_policy="claim", arena_side=6),
+        "baseline": dict(trade=False, appropriation=0.5, owner_policy="claim", arena_side=6),
     },
 }
 
@@ -70,11 +110,11 @@ def capture(name, config_key="headline", every=1, out_path=None):
     # --- 1. B0 gate: off-config reproduces the canon anchor, books no tribute -- #
     wb0, _ = run(**spec["B0"])
     fpb0 = wb0.state_fingerprint()
-    ok_b0 = (fpb0 == spec["B0_anchor"] and wb0._appropriated_total == 0.0)
+    guard_ok = spec["B0_guard"](wb0)
+    ok_b0 = (fpb0 == spec["B0_anchor"] and guard_ok)
     print(f"B0 gate       : {fpb0} vs {spec['B0_anchor']}  -> "
-          f"{'BYTE-IDENTICAL ✓' if ok_b0 else 'MISMATCH ✗'}   "
-          f"(appropriated_total={wb0._appropriated_total})")
-    assert ok_b0, "B0 gate failed: not byte-identical to the canon anchor / nonzero tribute"
+          f"{'BYTE-IDENTICAL ✓' if ok_b0 else 'MISMATCH ✗'}   (guard_ok={guard_ok})")
+    assert ok_b0, "B0 gate failed: not byte-identical to the canon anchor / zero-invariant broke"
 
     # --- 2. reproducibility: two clean headline runs agree -------------------- #
     cfg = spec[config_key]
@@ -89,10 +129,12 @@ def capture(name, config_key="headline", every=1, out_path=None):
     # --- 3. capture: rebuild the SAME world (days=0 -> pristine) and step ------ #
     ws, _ = run(**cfg, days=0)                     # constructed identically, not yet stepped
     frames = []
+    prev = None
     for _ in range(DAYS):
         ws.step()
         if ws.t % every == 0 or ws.t == DAYS:      # ws.t = 1..300 -> label is the TRUE sim-day
-            frames.append(frame_from_world(ws, ws.t))
+            fr = frame_from_world(ws, ws.t, prev)
+            frames.append(fr); prev = fr
 
     # --- 4. snapshot-safe: the snapped run == the clean run ------------------- #
     f_snap = fp(ws)

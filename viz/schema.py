@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 def _f9(v) -> float:
@@ -33,11 +33,18 @@ class SnapFrame:
     plant: list           # w.plant.tolist() (R x C)
     owner_ids: list       # sorted(list(w.owner_ids()))
     appropriated_total: float   # w._appropriated_total (.9f)
+    # turnover flow, computed as a delta vs the previous SNAPPED frame (defaults keep old
+    # snapshots that predate these fields loadable via SnapFrame(**json)):
+    births: list = field(default_factory=list)   # [[oid, i, j], ...] appeared since prev
+    deaths: list = field(default_factory=list)    # [[i, j], ...] vanished since prev
 
 
-def frame_from_world(w, t) -> SnapFrame:
+def frame_from_world(w, t, prev=None) -> SnapFrame:
     """Read one frame off a live world. PURE: mutates nothing on `w` (only reads pop, the
-    ownership ledger, the plant grid, owner ids, and the cumulative tribute)."""
+    ownership ledger, the plant grid, owner ids, and the cumulative tribute).
+
+    `prev` = the previous SNAPPED SnapFrame (or None for the first). births/deaths are a
+    pure frame-to-frame delta on agent oids — the schema never touches the event log."""
     agents = [
         [int(a.oid), int(a.i), int(a.j), _f9(a.body), _f9(a.gene), int(a.age)]
         for a in sorted(w.pop, key=lambda x: x.oid)
@@ -48,6 +55,14 @@ def frame_from_world(w, t) -> SnapFrame:
     }
     plant = [[float(x) for x in row] for row in w.plant.tolist()]
     owner_ids = sorted(int(o) for o in w.owner_ids())
+
+    births, deaths = [], []
+    if prev is not None:
+        prev_oids = {a[0] for a in prev.agents}
+        cur_oids = {a[0] for a in agents}
+        births = [[a[0], a[1], a[2]] for a in agents if a[0] not in prev_oids]
+        deaths = [[a[1], a[2]] for a in prev.agents if a[0] not in cur_oids]
+
     return SnapFrame(
         t=int(t),
         agents=agents,
@@ -55,6 +70,8 @@ def frame_from_world(w, t) -> SnapFrame:
         plant=plant,
         owner_ids=owner_ids,
         appropriated_total=_f9(w._appropriated_total),
+        births=births,
+        deaths=deaths,
     )
 
 

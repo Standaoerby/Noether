@@ -43,6 +43,8 @@ header .sub #day { color: var(--ink); font-variant-numeric: tabular-nums; }
 .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; }
 .dot.gold { background: var(--gold); }
 .dot.blue { background: var(--blue); }
+.dot.birth { background: #3ce66e; }
+.dot.death { background: #f04646; }
 .swatch { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; border-radius: 3px; }
 .swatch.owner { background: transparent; border: 2px solid var(--gold); }
 .swatch.food { background: #2fbf57; }
@@ -81,6 +83,16 @@ header .sub #day { color: var(--ink); font-variant-numeric: tabular-nums; }
 #toggles { display: flex; gap: 14px; color: var(--muted); }
 #toggles label { cursor: pointer; user-select: none; }
 #toggles input { accent-color: var(--accent); vertical-align: -1px; }
+
+/* ---- gallery selector ---- */
+#gallery-bar { display: flex; align-items: center; gap: 14px; margin: 4px 0 14px; flex-wrap: wrap; }
+#gallery-bar label { color: var(--muted); }
+#gallery-bar select {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font-size: 14px; cursor: pointer;
+}
+#gallery-bar select:hover { border-color: var(--accent); }
+.world-hint { color: var(--muted); font-size: 12.5px; }
 
 /* ---- panels ---- */
 #panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
