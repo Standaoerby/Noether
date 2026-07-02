@@ -84,6 +84,55 @@ header .sub #day { color: var(--ink); font-variant-numeric: tabular-nums; }
 #toggles label { cursor: pointer; user-select: none; }
 #toggles input { accent-color: var(--accent); vertical-align: -1px; }
 
+/* ---- PR-31 sandbox ---- */
+#sandbox {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+  margin: 4px 0 12px; padding: 10px 14px 12px; display: flex; flex-wrap: wrap;
+  align-items: center; gap: 12px 18px;
+}
+#sandbox legend { color: var(--ink); padding: 0 6px; }
+#sandbox legend b { color: var(--accent); }
+#sandbox label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+#sandbox .tech { color: #5c6873; font-size: 11px; }
+#sandbox select, #sandbox input[type=number] {
+  background: #0a0d10; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px;
+}
+#sandbox input[type=range] { width: 120px; accent-color: var(--accent); }
+#sb-rho-val { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 2.2em; }
+.sb-btn, .ex-btn {
+  background: #17324a; color: var(--ink); border: 1px solid var(--accent);
+  border-radius: 7px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+}
+.sb-btn:hover, .ex-btn:hover { background: #1d436a; }
+.sb-status { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
+.sb-status.err { color: var(--warn); }
+
+#export-bar { display: flex; align-items: center; gap: 16px; margin: 0 0 12px; }
+#export-bar label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+#export-bar .tech { color: #5c6873; font-size: 11px; }
+
+/* ---- PR-31 sweep ---- */
+#sweep-wrap { margin: 8px 0 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 12px; }
+.sweep-head { display: flex; justify-content: space-between; align-items: center; }
+.sweep-head h2 { font-size: 15px; margin: 2px 0 6px; font-weight: 620; }
+.sweep-head .unit { color: var(--muted); font-size: 12px; font-weight: 400; }
+#sweep { height: 240px; aspect-ratio: auto; }
+.chart-legend .birth { color: #3ce66e; }
+.chart-legend .death { color: #f04646; }
+
+/* ---- "чистая фигура" mode: hide everything but panels + plaque ---- */
+body.figure-mode #controls,
+body.figure-mode #sandbox,
+body.figure-mode #export-bar,
+body.figure-mode #gallery-bar,
+body.figure-mode #legend,
+body.figure-mode #timeline,
+body.figure-mode #sweep-wrap,
+body.figure-mode .help-btn,
+body.figure-mode #status { display: none !important; }
+body.figure-mode .readout { display: none; }
+
 /* ---- gallery selector ---- */
 #gallery-bar { display: flex; align-items: center; gap: 14px; margin: 4px 0 14px; flex-wrap: wrap; }
 #gallery-bar label { color: var(--muted); }

@@ -42,6 +42,7 @@ const state = {
   maxPlant: 1e-9, maxBody: 1e-9,
   layers: { food: true, bodies: true, owner: true, traj: false, flow: false },
   speed: 4, playing: false, timer: null, world: "appropriation",
+  sweep: null, figTag: "appropriation", sweepWorld: "appropriation",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -328,6 +329,17 @@ function wireControls() {
 
   $("world").addEventListener("change", (e) => { stopPlay(); loadWorld(e.target.value); });
 
+  // PR-31: sandbox + sweep + export
+  $("sb-rho").addEventListener("input", (e) => { $("sb-rho-val").textContent = (+e.target.value).toFixed(1); });
+  $("sb-run").addEventListener("click", sbRun);
+  $("sb-sweep").addEventListener("click", sbSweep);
+  $("ex-fig").addEventListener("click", exportFigure);
+  $("ex-sweep").addEventListener("click", exportSweep);
+  $("fig-mode").addEventListener("change", (e) => document.body.classList.toggle("figure-mode", e.target.checked));
+  const swcv = $("sweep");
+  swcv.addEventListener("mousemove", (e) => showSweepTip(e));
+  swcv.addEventListener("mouseleave", () => { $("sweep-tip").hidden = true; });
+
   const help = $("help-btn"), legend = $("legend");
   help.addEventListener("click", () => {
     legend.hidden = !legend.hidden;
@@ -341,6 +353,157 @@ function wireControls() {
   }
 }
 
+/* ------------------------------------------------- PR-31: live sandbox + sweep */
+function setSbStatus(m, err) {
+  const el = $("sb-status"); el.textContent = m; el.classList.toggle("err", !!err);
+}
+
+async function fetchRun(w, rho, seed, arena, verb) {
+  const u = `/run?world=${w}&rho=${rho}&seed=${seed}&arena=${arena}&verb=${verb}`;
+  const r = await fetch(u);
+  if (!r.ok) { const j = await r.json().catch(() => ({ detail: r.status })); throw new Error(j.detail || r.status); }
+  return r.json();
+}
+
+function runFromLive(resp) {
+  const frames = resp.frames, byT = {}, posByT = {};
+  for (const f of frames) {
+    byT[f.t] = f;
+    const m = new Map(); for (const a of f.agents) m.set(a[0], [a[1], a[2]]);
+    posByT[f.t] = m;
+  }
+  const meta = Object.assign({}, resp.meta, { t_min: resp.t_min, t_max: resp.t_max });
+  return { meta, frames, byT, posByT, series: buildSeries(frames) };
+}
+
+function setLiveTitles(w, rho, seed, arena, verbOn) {
+  const wm = WORLD_META[w];
+  $("left-title").textContent = "контроль (механизм выкл)"; $("left-cfg").textContent = "";
+  $("right-title").textContent = verbOn ? (wm ? wm.right[0] : w) : "контроль";
+  $("right-cfg").textContent = `живой прогон · ρ=${(+rho).toFixed(1)}`;
+  $("contrast-sub").textContent =
+    `Живой прогон «${w}»: сид ${seed}, арена ${arena || "открытая"}. ` +
+    `Слева контроль, справа механизм при дозе ρ=${(+rho).toFixed(1)} — посчитано на бэке под 4-гейтом.`;
+  $("world-hint").textContent = "живой прогон (гейт-защищён)";
+}
+
+async function sbRun() {
+  const w = $("sb-world").value, rho = $("sb-rho").value, seed = $("sb-seed").value,
+    arena = $("sb-arena").value, verbOn = $("sb-verb").checked;
+  stopPlay();
+  setSbStatus("гоняю живой прогон… (4 гейта: B0 · reproducibility · snapshot-safe)");
+  try {
+    const [lo, hi] = await Promise.all([
+      fetchRun(w, rho, seed, arena, "off"),                 // left = control
+      fetchRun(w, rho, seed, arena, verbOn ? "on" : "off"), // right = mechanism (or control)
+    ]);
+    state.baseline = runFromLive(lo); state.headline = runFromLive(hi);
+    state.world = "__live__"; state.figTag = `live_${w}_r${(+rho).toFixed(1)}_s${seed}`;
+    const m = state.headline.meta;
+    state.gridR = m.R || 14; state.gridC = m.C || 14; state.tMin = hi.t_min; state.tMax = hi.t_max;
+    computeScales();
+    setLiveTitles(w, rho, seed, arena, verbOn);
+    const scrub = $("scrub"); scrub.min = state.tMin; scrub.max = state.tMax; scrub.value = state.tMin;
+    draw(state.tMin);
+    setSbStatus(`готово · гейт ✓ · B0 ${hi.b0_fp} (канон) · safe ${hi.safe_fp}`);
+  } catch (err) {
+    setSbStatus("ГЕЙТ КРАСНЫЙ / ошибка: " + err.message, true);
+    console.error(err);
+  }
+}
+
+async function sbSweep() {
+  const w = $("sb-world").value, seed = $("sb-seed").value, arena = $("sb-arena").value;
+  setSbStatus("свип по ρ… (гейт на каждой точке; rho=0 — встроенный контроль)");
+  try {
+    const r = await fetch(`/sweep?world=${w}&seed=${seed}&arena=${arena}&rhos=0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0`);
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || r.status); }
+    const data = await r.json();
+    state.sweep = data.points; state.sweepWorld = w;
+    $("sweep-wrap").hidden = false;
+    drawSweep(data.points);
+    $("sweep-wrap").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setSbStatus(`свип готов · ${data.points.length} точек ρ (гейт ✓ на каждой)`);
+  } catch (err) {
+    setSbStatus("свип — ГЕЙТ КРАСНЫЙ / ошибка: " + err.message, true);
+    console.error(err);
+  }
+}
+
+const SW_PAD = { l: 38, r: 12, t: 12, b: 26 };
+function drawSweep(points) {
+  const cv = $("sweep"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height, iw = W - SW_PAD.l - SW_PAD.r, ih = H - SW_PAD.t - SW_PAD.b;
+  ctx.clearRect(0, 0, W, H);
+  const xs = points.map(p => p.rho), xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const X = r => SW_PAD.l + (xmax > xmin ? (r - xmin) / (xmax - xmin) : 0) * iw;
+  const Y = v => SW_PAD.t + ih - Math.max(0, Math.min(1, v)) * ih;
+  const maxAlive = Math.max(1, ...points.map(p => p.alive));
+  const maxTurn = Math.max(1, ...points.map(p => Math.max(p.births_total, p.deaths_total)));
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(SW_PAD.l, Y(0)); ctx.lineTo(W - SW_PAD.r, Y(0)); ctx.stroke();
+  ctx.fillStyle = "#6a7681"; ctx.font = "10px sans-serif";
+  ctx.textAlign = "right"; ctx.fillText("1.0", SW_PAD.l - 4, SW_PAD.t + 8); ctx.fillText("0", SW_PAD.l - 4, Y(0));
+  ctx.textAlign = "center";
+  for (const r of xs) ctx.fillText(r.toFixed(1), X(r), H - 10);
+  ctx.textAlign = "left"; ctx.fillText("ρ (доза) →", SW_PAD.l, H - 2);
+
+  const series = [
+    [p => (p.owner_share || 0), "#f4c542"],      // absolute 0..1
+    [p => p.alive / maxAlive, "#6cb0ea"],
+    [p => p.births_total / maxTurn, "#3ce66e"],
+    [p => p.deaths_total / maxTurn, "#f04646"],
+  ];
+  for (const [nf, c] of series) {
+    ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.beginPath();
+    points.forEach((p, i) => { const x = X(p.rho), y = Y(nf(p)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+    ctx.fillStyle = c;
+    for (const p of points) { ctx.beginPath(); ctx.arc(X(p.rho), Y(nf(p)), 3, 0, Math.PI * 2); ctx.fill(); }
+  }
+}
+
+function showSweepTip(e) {
+  if (!state.sweep) return;
+  const cv = $("sweep"), rect = cv.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width * cv.width;
+  const iw = cv.width - SW_PAD.l - SW_PAD.r;
+  const xs = state.sweep.map(p => p.rho), xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const rho = xmin + (px - SW_PAD.l) / iw * (xmax - xmin);
+  let best = state.sweep[0], bd = Infinity;
+  for (const p of state.sweep) { const d = Math.abs(p.rho - rho); if (d < bd) { bd = d; best = p; } }
+  const tip = $("sweep-tip");
+  tip.innerHTML = `ρ=${best.rho.toFixed(1)}<br><span class="b">доля ${(best.owner_share || 0).toFixed(3)}</span> · <span class="a">живых ${best.alive}</span>`
+    + `<br>рожд ${best.births_total} · смерт ${best.deaths_total}`;
+  tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.hidden = false;
+}
+
+/* ------------------------------------------------------- PR-31: PNG export */
+function download(dataURL, name) {
+  const a = document.createElement("a"); a.href = dataURL; a.download = name; a.click();
+}
+function exportFigure() {
+  const bl = $("cv-baseline"), hl = $("cv-headline"); if (!bl.width) return;
+  const pad = 18, gap = 18, headH = 60;
+  const W = pad * 2 + bl.width + gap + hl.width, H = headH + Math.max(bl.height, hl.height) + pad;
+  const off = document.createElement("canvas"); off.width = W; off.height = H;
+  const x = off.getContext("2d");
+  x.fillStyle = "#0c0f12"; x.fillRect(0, 0, W, H);
+  x.fillStyle = "#d8e0e6"; x.font = "bold 16px sans-serif";
+  x.fillText(`Noether · день ${$("day").textContent}/${state.tMax}`, pad, 22);
+  x.font = "13px sans-serif"; x.fillStyle = "#8a97a2";
+  x.fillText($("plq-share").textContent.replace(/\s+/g, " "), pad, 42);
+  x.font = "12px sans-serif"; x.fillStyle = "#8a97a2";
+  x.fillText("Мир " + $("left-title").textContent, pad, headH - 6);
+  x.fillText("Мир " + $("right-title").textContent, pad + bl.width + gap, headH - 6);
+  x.drawImage(bl, pad, headH); x.drawImage(hl, pad + bl.width + gap, headH);
+  download(off.toDataURL("image/png"), `noether_${state.figTag}_t${$("day").textContent}.png`);
+}
+function exportSweep() {
+  download($("sweep").toDataURL("image/png"), `noether_sweep_${state.sweepWorld}.png`);
+}
+
 /* ------------------------------------------------------------- world switch */
 function applyWorldMeta(w) {
   const wm = WORLD_META[w]; if (!wm) return;
@@ -352,7 +515,7 @@ function applyWorldMeta(w) {
 
 async function loadWorld(w) {
   try {
-    state.world = w;
+    state.world = w; state.figTag = w;
     const r = runsFor(w);
     setStatus(`загрузка «${w}»…`);
     const [bl, hl] = await Promise.all([loadRun(r.baseline), loadRun(r.headline)]);

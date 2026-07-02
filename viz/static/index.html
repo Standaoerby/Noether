@@ -63,6 +63,41 @@
     </div>
   </section>
 
+  <!-- PR-31: live sandbox (gate-protected backend run) -->
+  <fieldset id="sandbox">
+    <legend>песочница — <b>живой прогон</b> <span class="tech">(gate-protected)</span></legend>
+    <label>мир
+      <select id="sb-world">
+        <option value="appropriation">присвоение (23)</option>
+        <option value="institution">институт (24)</option>
+        <option value="inheritance">наследование (25)</option>
+        <option value="trade">рынок (27)</option>
+      </select>
+    </label>
+    <label>извлечение <b>ρ</b>
+      <input type="range" id="sb-rho" min="0" max="1" step="0.1" value="0.5" />
+      <output id="sb-rho-val">0.5</output>
+    </label>
+    <label>сид <input type="number" id="sb-seed" value="0" min="0" style="width:4em" /></label>
+    <label>арена
+      <select id="sb-arena">
+        <option value="">открытая</option>
+        <option value="6" selected>бокс-6</option>
+        <option value="10">бокс-10</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="sb-verb" checked /> механизм вкл <span class="tech">(verb)</span></label>
+    <button id="sb-run" class="sb-btn">прогнать</button>
+    <button id="sb-sweep" class="sb-btn">свип по ρ</button>
+    <span id="sb-status" class="sb-status"></span>
+  </fieldset>
+
+  <!-- PR-31: figure export -->
+  <div id="export-bar">
+    <button id="ex-fig" class="ex-btn">снять фигуру PNG</button>
+    <label><input type="checkbox" id="fig-mode" /> чистая фигура <span class="tech">(без интерфейса)</span></label>
+  </div>
+
   <section id="gallery-bar">
     <label>мир из башни:
       <select id="world">
@@ -86,6 +121,22 @@
       <canvas id="cv-headline" width="560" height="560"></canvas>
       <div class="readout" id="ro-headline"></div>
     </figure>
+  </section>
+
+  <!-- PR-31: dose-response sweep curve -->
+  <section id="sweep-wrap" hidden>
+    <div class="sweep-head">
+      <h2>Дозовая кривая <span class="unit">(градиент по ρ: где власть отрывается от нуля)</span></h2>
+      <button id="ex-sweep" class="ex-btn">свип PNG</button>
+    </div>
+    <canvas id="sweep" width="960" height="240"></canvas>
+    <div class="chart-legend">
+      <span class="ln headline">— доля богатства (owner share)</span>
+      <span class="ln baseline">— живых (alive)</span>
+      <span class="ln birth">— рождений (оборот↑)</span>
+      <span class="ln death">— смертей (оборот↓)</span>
+    </div>
+    <div id="sweep-tip" class="tip" hidden></div>
   </section>
 
   <!-- A. Timeline charts -->
