@@ -52,6 +52,8 @@ WORLDS = {
         "B0_anchor": CANON_COMM,                  # "a91480561b6de937"
         "headline": dict(appropriation=0.5, owner_policy="claim", arena_side=6,
                          injection_strength=0.0, injectors=0),   # rho=0.5 claim, box6, sal off
+        "baseline": dict(appropriation=0.0, owner_policy="claim", arena_side=6,
+                         injection_strength=0.0, injectors=0),   # rho=0 control, SAME arena/seed
     },
 }
 
@@ -87,10 +89,10 @@ def capture(name, config_key="headline", every=1, out_path=None):
     # --- 3. capture: rebuild the SAME world (days=0 -> pristine) and step ------ #
     ws, _ = run(**cfg, days=0)                     # constructed identically, not yet stepped
     frames = []
-    for t in range(DAYS):
+    for _ in range(DAYS):
         ws.step()
-        if t % every == 0:
-            frames.append(frame_from_world(ws, t))
+        if ws.t % every == 0 or ws.t == DAYS:      # ws.t = 1..300 -> label is the TRUE sim-day
+            frames.append(frame_from_world(ws, ws.t))
 
     # --- 4. snapshot-safe: the snapped run == the clean run ------------------- #
     f_snap = fp(ws)

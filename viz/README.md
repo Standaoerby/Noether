@@ -15,9 +15,34 @@ frames. A snapshot is only written after four gates prove it reflects the *measu
 ## Run
 
 ```bash
-python viz/capture.py                      # appropriation / headline, every tick
+python viz/capture.py appropriation headline     # rho=0.5 claim, box6 — the stratum
+python viz/capture.py appropriation baseline     # rho=0   claim, box6 — the control
 python viz/capture.py appropriation headline 5   # every 5th tick
 ```
+
+Frames are labelled by the **true sim-day** (`ws.t`, 1…300), not a loop index. `headline`
+(ρ=0.5) and `baseline` (ρ=0) share arena/seed — a born-together pair the Phase-3 front can
+overlay synchronously (stratum vs no-stratum on identical geometry).
+
+## Serve (PR-2 — read-only run registry)
+
+```bash
+cd viz
+uvicorn server:app --port 8000     # scans runs/*.snap.jsonl at startup
+```
+
+The backend is **fully decoupled**: it does not import `Code/` and never calls the sim — it
+works only over `runs/*.snap.jsonl` + paired `*.meta.json`. `final_ownership` is recomputed
+from the last frame by arithmetic (owner_ids + agent bodies), never via `ownership_metrics`.
+
+Endpoints: `GET /health` · `GET /runs` · `GET /{run}/meta` · `GET /{run}/frame/{t}` (404 out
+of range) · `GET /{run}/frames?t0=&t1=&stride=` · `GET /` (stub for the PR-3 viewer). CORS is
+open to `localhost:*`. Regenerate `runs/` with `capture.py` before serving (runs/ is
+git-ignored).
+
+Note: `baseline` (claim, ρ=0) forms **no** ownership ledger at all (`_do_claims` runs only
+when ρ>0), so its `owner_share` is `0.0` and `owner_gap` is `null` — a cleaner "no stratum"
+control than a fair-share baseline, and the sharp contrast against headline's 0.463.
 
 ## Acceptance (what you see before merge — any ✗ ⇒ do not merge)
 

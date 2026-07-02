@@ -17,13 +17,6 @@ import os
 import sys
 from dataclasses import dataclass, asdict
 
-# --- read-only access to the canon's constants (Code/ is a sibling of viz/) --- #
-_CODE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Code")
-if _CODE not in sys.path:
-    sys.path.insert(0, _CODE)
-
-from sim_comm import R, C, DAYS          # noqa: E402  (grid + horizon, for meta)
-
 
 def _f9(v) -> float:
     """The canonical `.9f` quantisation used by `state_fingerprint` (f"{x:.9f}"), returned
@@ -89,7 +82,15 @@ def frames_from_jsonl(path) -> list:
 
 def meta(w) -> dict:
     """Static run metadata for the viewer (grid, horizon, current oases, seed). Pure read;
-    no numpy types (oases as [[i,j], ...], everything float/int)."""
+    no numpy types (oases as [[i,j], ...], everything float/int).
+
+    The canon import is LOCAL to this function so that `frame_from_world` / `frames_*_jsonl`
+    can be used (e.g. by viz/server.py) WITHOUT pulling Code/ into the importer — the reader
+    side of the viz stays fully decoupled from the simulation."""
+    _code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Code")
+    if _code not in sys.path:
+        sys.path.insert(0, _code)
+    from sim_comm import R, C, DAYS      # noqa: E402  (grid + horizon)
     return {
         "R": int(R),
         "C": int(C),
