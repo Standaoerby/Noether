@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Noether — birth of a stratum from zero (Phase 3)</title>
+  <link rel="stylesheet" href="/static/viz.css" />
+</head>
+<body>
+  <header>
+    <h1>Birth of a stratum, from zero &mdash; in contrast</h1>
+    <p class="sub">Same arena, same seed, day&nbsp;<span id="day">1</span>&nbsp;/&nbsp;300.
+      Left: no property (&rho;=0). Right: body&rarr;body transfer on (&rho;=0.5) &rarr; 13 owners, share&nbsp;0.463.</p>
+  </header>
+
+  <section id="controls">
+    <input type="range" id="scrub" min="1" max="300" value="1" step="1" />
+    <div id="toggles">
+      <label><input type="checkbox" id="ly-food" checked /> food</label>
+      <label><input type="checkbox" id="ly-bodies" checked /> bodies</label>
+      <label><input type="checkbox" id="ly-owner" checked /> ownership</label>
+      <label><input type="checkbox" id="ly-traj" /> trajectories</label>
+    </div>
+  </section>
+
+  <section id="panels">
+    <figure class="panel">
+      <figcaption>baseline &mdash; <span class="cfg">&rho;=0, claim, box6</span> &middot; a world without property</figcaption>
+      <canvas id="cv-baseline" width="560" height="560"></canvas>
+      <div class="readout" id="ro-baseline"></div>
+    </figure>
+    <figure class="panel">
+      <figcaption>headline &mdash; <span class="cfg">&rho;=0.5, claim, box6</span> &middot; the tower's one non-linearity</figcaption>
+      <canvas id="cv-headline" width="560" height="560"></canvas>
+      <div class="readout" id="ro-headline"></div>
+    </figure>
+  </section>
+
+  <footer id="status">loading&hellip;</footer>
+
+  <script src="/static/viz.js"></script>
+</body>
+</html>

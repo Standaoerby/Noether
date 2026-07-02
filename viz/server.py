@@ -20,10 +20,13 @@ from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from schema import frames_from_jsonl, SnapFrame       # lazy canon import -> no Code/ here
 
 RUNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
 # --------------------------------------------------------------------------- #
@@ -107,8 +110,8 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    # stub — PR-3 mounts static/index.html here
-    return {"service": "noether-viz", "runs": sorted(REGISTRY)}
+    # PR-3: the two-panel viewer. Static assets are served from /static/*.
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 @app.get("/health")
@@ -160,3 +163,8 @@ def run_frames(run: str,
     lo = frames[0].t if t0 is None else t0
     hi = frames[-1].t if t1 is None else t1
     return [asdict(f) for f in frames if lo <= f.t <= hi and (f.t - lo) % stride == 0]
+
+
+# static assets (index.html is served on / above; viz.js / viz.css from /static/*).
+# Mounted last so the explicit API routes take precedence.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
