@@ -1,42 +1,96 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Noether — birth of a stratum from zero (Phase 3)</title>
+  <title>Ноётер — как из ничего рождается класс собственников</title>
   <link rel="stylesheet" href="/static/viz.css" />
 </head>
 <body>
   <header>
-    <h1>Birth of a stratum, from zero &mdash; in contrast</h1>
-    <p class="sub">Same arena, same seed, day&nbsp;<span id="day">1</span>&nbsp;/&nbsp;300.
-      Left: no property (&rho;=0). Right: body&rarr;body transfer on (&rho;=0.5) &rarr; 13 owners, share&nbsp;0.463.</p>
+    <div class="head-row">
+      <div>
+        <h1>Как из ничего рождается класс собственников</h1>
+        <p class="sub">Один и тот же мир, один и тот же случай. День&nbsp;<span id="day">1</span>&nbsp;из&nbsp;300.
+          Разница только в одном: слева собственности нет, справа она включена.</p>
+      </div>
+      <button id="help-btn" class="help-btn" aria-expanded="false">? Как читать</button>
+    </div>
+
+    <!-- Legend: "Как читать" (collapsible) -->
+    <section id="legend" class="legend" hidden>
+      <ul>
+        <li><span class="dot gold"></span> <b>жёлтая точка</b> — агент-владелец (клетка закреплена за ним). Чем крупнее, тем больше массы он накопил.</li>
+        <li><span class="dot blue"></span> <b>синяя точка</b> — обычный агент, без собственности.</li>
+        <li><span class="swatch owner"></span> <b>жёлтая рамка клетки</b> — эта клетка кому-то принадлежит.</li>
+        <li><span class="swatch food"></span> <b>зелёная заливка</b> — еда (ярче = больше). Оазисы кормят мир.</li>
+        <li><span class="swatch line"></span> <b>линии</b> — пути, по которым агенты ходили («пути агентов»).</li>
+        <li>Слева собственность <b>выключена</b> — сравнение с миром, где её нет.</li>
+        <li><b>Что смотреть:</b> справа масса стекается к немногим (клетки желтеют, владельцы жиреют) и живых становится меньше. Слева все живут ровно и никто не растёт.</li>
+      </ul>
+      <div class="radius-scale">
+        <span>масса тела:</span>
+        <span class="rc"><i class="body-dot s"></i> мало</span>
+        <span class="rc"><i class="body-dot m"></i> средне</span>
+        <span class="rc"><i class="body-dot l"></i> много</span>
+      </div>
+    </section>
   </header>
 
+  <!-- C. Contrast plaque -->
+  <section id="plaque" class="plaque">
+    <div class="delta" id="plq-alive"><span class="k">сколько живых</span><span class="v">—</span></div>
+    <div class="delta" id="plq-mass"><span class="k">всего живой массы</span><span class="v">—</span></div>
+    <div class="delta" id="plq-share"><span class="k">доля у владельцев</span><span class="v">—</span></div>
+    <p class="plaque-note">одна и та же арена и случайность — разница только в том, включён ли перенос собственности.</p>
+  </section>
+
+  <!-- B. Play + speed, slider, layer toggles -->
   <section id="controls">
+    <button id="play" class="play-btn" aria-label="играть">▶</button>
+    <label class="speed">скорость
+      <input type="range" id="speed" min="1" max="10" value="4" step="1" />
+      <span id="speed-val">4×</span>
+    </label>
     <input type="range" id="scrub" min="1" max="300" value="1" step="1" />
     <div id="toggles">
-      <label><input type="checkbox" id="ly-food" checked /> food</label>
-      <label><input type="checkbox" id="ly-bodies" checked /> bodies</label>
-      <label><input type="checkbox" id="ly-owner" checked /> ownership</label>
-      <label><input type="checkbox" id="ly-traj" /> trajectories</label>
+      <label><input type="checkbox" id="ly-food" checked /> еда</label>
+      <label><input type="checkbox" id="ly-bodies" checked /> тела</label>
+      <label><input type="checkbox" id="ly-owner" checked /> владение</label>
+      <label><input type="checkbox" id="ly-traj" /> пути агентов</label>
     </div>
   </section>
 
   <section id="panels">
     <figure class="panel">
-      <figcaption>baseline &mdash; <span class="cfg">&rho;=0, claim, box6</span> &middot; a world without property</figcaption>
+      <figcaption title="claim, box6, salience off">Мир <b>без собственности</b> <span class="cfg">ρ=0</span></figcaption>
       <canvas id="cv-baseline" width="560" height="560"></canvas>
       <div class="readout" id="ro-baseline"></div>
     </figure>
     <figure class="panel">
-      <figcaption>headline &mdash; <span class="cfg">&rho;=0.5, claim, box6</span> &middot; the tower's one non-linearity</figcaption>
+      <figcaption title="claim, box6, salience off">Мир <b>с собственностью</b> <span class="cfg">ρ=0.5 · перенос тело→тело</span></figcaption>
       <canvas id="cv-headline" width="560" height="560"></canvas>
       <div class="readout" id="ro-headline"></div>
     </figure>
   </section>
 
-  <footer id="status">loading&hellip;</footer>
+  <!-- A. Timeline charts -->
+  <section id="timeline">
+    <figure class="chart"><figcaption>Доля богатства у владельцев <span class="unit">(owner share)</span></figcaption>
+      <canvas id="chart-share" width="760" height="150"></canvas></figure>
+    <figure class="chart"><figcaption>Сколько живых <span class="unit">(alive)</span></figcaption>
+      <canvas id="chart-alive" width="760" height="150"></canvas></figure>
+    <figure class="chart"><figcaption>Всего живой массы, кг <span class="unit">(Σ body)</span></figcaption>
+      <canvas id="chart-mass" width="760" height="150"></canvas></figure>
+    <div class="chart-legend">
+      <span class="ln baseline">— мир без собственности</span>
+      <span class="ln headline">— мир с собственностью</span>
+    </div>
+    <p id="summary" class="summary">—</p>
+    <div id="tip" class="tip" hidden></div>
+  </section>
+
+  <footer id="status">загрузка…</footer>
 
   <script src="/static/viz.js"></script>
 </body>

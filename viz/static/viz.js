@@ -1,26 +1,30 @@
-/* viz.js — two-panel synchronous canvas over the read-only backend (PR-3, beta-front).
- * The front computes nothing over the sim: it fetches captured frames and draws them.
- * Ownership layers are empty-safe (baseline forever has cell_owner={}, owner_ids=[]). */
+/* viz.js — two-panel canvas + metric timeline + play + contrast plaque (PR-4).
+ * The front computes only DERIVED views over the preloaded frames (no sim, no new
+ * endpoints). Ownership layers are empty-safe (baseline forever has no owners). */
 
 "use strict";
 
-const BASE_URL = "";                       // same origin (served by FastAPI)
 const RUNS = { baseline: "appropriation_baseline", headline: "appropriation_headline" };
+const CHARTS = [
+  { id: "chart-share", key: "ownerShare", pct: true },
+  { id: "chart-alive", key: "alive" },
+  { id: "chart-mass", key: "sumBody" },
+];
+const PAD = { l: 34, r: 10, t: 12, b: 16 };
 
 const state = {
-  baseline: null,   // {meta, frames[], byT{}, posByT[]}
-  headline: null,
-  gridR: 14, gridC: 14,
-  tMin: 1, tMax: 300,
+  baseline: null, headline: null,
+  gridR: 14, gridC: 14, tMin: 1, tMax: 300,
   maxPlant: 1e-9, maxBody: 1e-9,
   layers: { food: true, bodies: true, owner: true, traj: false },
+  speed: 4, playing: false, timer: null,
 };
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { $("status").textContent = m; };
 
 async function getJSON(path) {
-  const r = await fetch(BASE_URL + path);
+  const r = await fetch(path);
   if (!r.ok) throw new Error(`${path} -> ${r.status}`);
   return r.json();
 }
@@ -28,20 +32,35 @@ async function getJSON(path) {
 async function loadRun(runName) {
   const meta = await getJSON(`/${runName}/meta`);
   const frames = await getJSON(`/${runName}/frames?t0=${meta.t_min}&t1=${meta.t_max}`);
-  const byT = {};
-  const posByT = {};                       // t -> Map(oid -> [i,j]) for trajectories
+  const byT = {}, posByT = {};
   for (const f of frames) {
     byT[f.t] = f;
     const m = new Map();
     for (const a of f.agents) m.set(a[0], [a[1], a[2]]);
     posByT[f.t] = m;
   }
-  return { meta, frames, byT, posByT };
+  return { meta, frames, byT, posByT, series: buildSeries(frames) };
+}
+
+/* A: derive the metric series once, per day */
+function buildSeries(frames) {
+  const s = { days: [], alive: [], sumBody: [], nOwners: [], ownerShare: [], tribute: [] };
+  for (const f of frames) {
+    const owners = new Set(f.owner_ids || []);
+    let sum = 0, ob = 0;
+    for (const a of f.agents) { sum += a[3]; if (owners.has(a[0])) ob += a[3]; }
+    s.days.push(f.t);
+    s.alive.push(f.agents.length);
+    s.sumBody.push(sum);
+    s.nOwners.push(owners.size);
+    s.ownerShare.push(sum > 0 ? ob / sum : 0);
+    s.tribute.push(f.appropriated_total || 0);
+  }
+  return s;
 }
 
 function computeScales() {
   for (const run of [state.baseline, state.headline]) {
-    if (!run) continue;
     for (const f of run.frames) {
       for (const row of f.plant) for (const v of row) if (v > state.maxPlant) state.maxPlant = v;
       for (const a of f.agents) if (a[3] > state.maxBody) state.maxBody = a[3];
@@ -49,7 +68,9 @@ function computeScales() {
   }
 }
 
-/* deterministic per-oid jitter so co-located agents cluster instead of overlapping */
+const at = (run, key, t) => run.series[key][t - state.tMin];
+
+/* ------------------------------------------------------------------ panels */
 function jitter(oid, salt, span) {
   const h = Math.sin(oid * 12.9898 + salt) * 43758.5453;
   return (h - Math.floor(h) - 0.5) * span;
@@ -57,56 +78,42 @@ function jitter(oid, salt, span) {
 
 function renderFrame(frame, canvas, meta) {
   const ctx = canvas.getContext("2d");
-  const W = canvas.width, H = canvas.height;
-  const R = state.gridR, C = state.gridC;
+  const W = canvas.width, H = canvas.height, R = state.gridR, C = state.gridC;
   const cw = W / C, ch = H / R;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#05070a";
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#05070a"; ctx.fillRect(0, 0, W, H);
 
-  // --- food layer: per-cell green heat -------------------------------------
   if (state.layers.food) {
-    for (let i = 0; i < R; i++) {
-      for (let j = 0; j < C; j++) {
-        const v = Math.max(0, Math.min(1, frame.plant[i][j] / state.maxPlant));
-        ctx.fillStyle = `rgb(${18 + 10 * v}, ${34 + 172 * v}, ${44 + 20 * v})`;
-        ctx.fillRect(j * cw, i * ch, cw + 0.5, ch + 0.5);
-      }
+    for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) {
+      const v = Math.max(0, Math.min(1, frame.plant[i][j] / state.maxPlant));
+      ctx.fillStyle = `rgb(${18 + 10 * v}, ${34 + 172 * v}, ${44 + 20 * v})`;
+      ctx.fillRect(j * cw, i * ch, cw + 0.5, ch + 0.5);
     }
   }
-  // faint grid
-  ctx.strokeStyle = "rgba(255,255,255,0.05)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.05)"; ctx.lineWidth = 1;
   for (let k = 0; k <= C; k++) { ctx.beginPath(); ctx.moveTo(k * cw, 0); ctx.lineTo(k * cw, H); ctx.stroke(); }
   for (let k = 0; k <= R; k++) { ctx.beginPath(); ctx.moveTo(0, k * ch); ctx.lineTo(W, k * ch); ctx.stroke(); }
 
-  // --- oasis layer: static hint from meta (final-epoch oases) ---------------
   if (state.layers.food && meta && meta.oases) {
-    ctx.strokeStyle = "rgba(120,220,140,0.45)";
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(120,220,140,0.45)"; ctx.lineWidth = 1.5;
     for (const [i, j] of meta.oases) ctx.strokeRect(j * cw + 1.5, i * ch + 1.5, cw - 3, ch - 3);
   }
 
-  // --- ownership (cells) — empty-safe: baseline draws nothing ---------------
   const cellOwner = frame.cell_owner || {};
   if (state.layers.owner && Object.keys(cellOwner).length) {
-    ctx.strokeStyle = "rgba(244,197,66,0.55)";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(244,197,66,0.55)"; ctx.lineWidth = 2;
     for (const key of Object.keys(cellOwner)) {
       const [i, j] = key.split(",").map(Number);
       ctx.strokeRect(j * cw + 0.5, i * ch + 0.5, cw - 1, ch - 1);
     }
   }
 
-  // --- trajectories (optional): owners' paths up to t -----------------------
   const ownerSet = new Set(frame.owner_ids || []);
   if (state.layers.traj && ownerSet.size) {
     const run = canvas.id.endsWith("headline") ? state.headline : state.baseline;
-    ctx.strokeStyle = "rgba(244,197,66,0.20)";
-    ctx.lineWidth = 1.25;
+    ctx.strokeStyle = "rgba(244,197,66,0.20)"; ctx.lineWidth = 1.25;
     for (const oid of ownerSet) {
-      ctx.beginPath();
-      let started = false;
+      ctx.beginPath(); let started = false;
       for (let t = state.tMin; t <= frame.t; t++) {
         const p = run.posByT[t] && run.posByT[t].get(oid);
         if (!p) continue;
@@ -117,90 +124,205 @@ function renderFrame(frame, canvas, meta) {
     }
   }
 
-  // --- bodies: circle, area ∝ body (radius ∝ sqrt(body)) --------------------
   if (state.layers.bodies) {
     for (const a of frame.agents) {
-      const oid = a[0], i = a[1], j = a[2], body = a[3];
-      const isOwner = ownerSet.has(oid);
+      const oid = a[0], i = a[1], j = a[2], body = a[3], isOwner = ownerSet.has(oid);
       const cx = (j + 0.5) * cw + jitter(oid, 0.0, cw * 0.5);
       const cy = (i + 0.5) * ch + jitter(oid, 3.1, ch * 0.5);
       const r = Math.max(1.4, 0.42 * cw * Math.sqrt(body / state.maxBody));
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = isOwner ? "rgba(244,197,66,0.92)" : "rgba(120,180,235,0.78)";
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = isOwner ? "rgba(244,197,66,0.92)" : "rgba(108,176,234,0.78)";
       ctx.fill();
-      if (isOwner) {
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "#f4c542";
-        ctx.stroke();
-      }
+      if (isOwner) { ctx.lineWidth = 1.5; ctx.strokeStyle = "#f4c542"; ctx.stroke(); }
     }
   }
 }
 
 function readout(frame, elId) {
-  const agents = frame.agents;
   const owners = new Set(frame.owner_ids || []);
   let sumBody = 0, ownerBody = 0;
-  for (const a of agents) { sumBody += a[3]; if (owners.has(a[0])) ownerBody += a[3]; }
-  const ownerShare = sumBody > 0 ? ownerBody / sumBody : 0;
-  const el = $(elId);
-  el.innerHTML =
-    `<span>agents <b>${agents.length}</b></span>` +
-    `<span>Σ body <b>${sumBody.toFixed(1)}</b> kg</span>` +
-    `<span>owners <b>${owners.size}</b></span>` +
-    `<span class="gold">owner share <b>${ownerShare.toFixed(3)}</b></span>` +
-    `<span>tribute <b>${(frame.appropriated_total || 0).toFixed(0)}</b> kg</span>`;
+  for (const a of frame.agents) { sumBody += a[3]; if (owners.has(a[0])) ownerBody += a[3]; }
+  const share = sumBody > 0 ? ownerBody / sumBody : 0;
+  $(elId).innerHTML =
+    `<span>сколько живых <b>${frame.agents.length}</b></span>` +
+    `<span>всего массы <b>${sumBody.toFixed(1)}</b> кг</span>` +
+    `<span>владельцев <b>${owners.size}</b></span>` +
+    `<span class="gold">доля богатства <b>${share.toFixed(3)}</b></span>` +
+    `<span>отобрано <b>${(frame.appropriated_total || 0).toFixed(0)}</b> кг</span>`;
 }
 
+/* --------------------------------------------------------------- A: charts */
+function chartGeom(cv) { return { W: cv.width, H: cv.height, iw: cv.width - PAD.l - PAD.r, ih: cv.height - PAD.t - PAD.b }; }
+function xAt(g, day) { return PAD.l + (day - state.tMin) / (state.tMax - state.tMin) * g.iw; }
+function yAt(g, v, yMax) { return PAD.t + g.ih - (yMax > 0 ? v / yMax : 0) * g.ih; }
+
+function drawChart(cv, key, t, pct) {
+  const ctx = cv.getContext("2d"), g = chartGeom(cv);
+  ctx.clearRect(0, 0, g.W, g.H);
+  const bs = state.baseline.series[key], hs = state.headline.series[key];
+  let yMax = 0; for (const v of bs) if (v > yMax) yMax = v; for (const v of hs) if (v > yMax) yMax = v;
+  yMax = yMax > 0 ? yMax * 1.1 : 1;
+
+  // axes: 0 and max ticks
+  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD.l, yAt(g, 0, yMax)); ctx.lineTo(g.W - PAD.r, yAt(g, 0, yMax)); ctx.stroke();
+  ctx.fillStyle = "#6a7681"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
+  const lab = (v) => pct ? Math.round(v * 100) + "%" : (v >= 100 ? Math.round(v) : v.toFixed(1));
+  ctx.fillText(lab(yMax / 1.1), PAD.l - 4, PAD.t + 8);
+  ctx.fillText(lab(0), PAD.l - 4, yAt(g, 0, yMax) - 1);
+
+  const line = (arr, color, w) => {
+    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const x = xAt(g, state.tMin + i), y = yAt(g, arr[i], yMax);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  };
+  line(bs, "#6cb0ea", 1.6);
+  line(hs, "#f4c542", 2);
+
+  // current-day marker
+  const mx = xAt(g, t);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(mx, PAD.t); ctx.lineTo(mx, PAD.t + g.ih); ctx.stroke();
+  const i = t - state.tMin;
+  for (const [arr, c] of [[bs, "#6cb0ea"], [hs, "#f4c542"]]) {
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(mx, yAt(g, arr[i], yMax), 3, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawCharts(t) { for (const c of CHARTS) drawChart($(c.id), c.key, t, c.pct); }
+
+/* ------------------------------------------------------- C: plaque + summary */
+function fmtPct(from, to) {
+  if (!from) return "";
+  const d = (to - from) / from * 100;
+  return (d >= 0 ? "+" : "") + Math.round(d) + "%";
+}
+function block(k, left, right, pct, cls) {
+  return `<span class="k">${k}</span><span class="v"><span class="a">${left}</span>`
+    + `<span class="arw">→</span><span class="b ${cls}">${right}</span>`
+    + (pct ? `<span class="pct ${cls}">${pct}</span>` : "") + `</span>`;
+}
+
+function updatePlaque(t) {
+  const bA = at(state.baseline, "alive", t), hA = at(state.headline, "alive", t);
+  const bM = at(state.baseline, "sumBody", t), hM = at(state.headline, "sumBody", t);
+  const bS = at(state.baseline, "ownerShare", t), hS = at(state.headline, "ownerShare", t);
+  $("plq-alive").innerHTML = block("сколько живых", bA, hA, fmtPct(bA, hA), "warn");
+  $("plq-mass").innerHTML = block("всего живой массы", bM.toFixed(0) + " кг", hM.toFixed(0) + " кг", fmtPct(bM, hM), "warn");
+  $("plq-share").innerHTML = block("доля у владельцев",
+    Math.round(bS * 100) + "%", Math.round(hS * 100) + "%", "", "gold");
+}
+
+function updateSummary(t) {
+  const bA = at(state.baseline, "alive", t);
+  const hO = at(state.headline, "nOwners", t), hS = at(state.headline, "ownerShare", t), hA = at(state.headline, "alive", t);
+  $("summary").textContent =
+    `День ${t}: слева никто не владеет, живых ${bA}. ` +
+    `Справа ${hO} владельцев держат ${Math.round(hS * 100)}% массы, живых осталось ${hA}.`;
+}
+
+/* -------------------------------------------------------------------- draw */
 function draw(t) {
   $("day").textContent = t;
-  for (const side of ["baseline", "headline"]) {
-    const run = state[side];
-    if (!run) continue;
-    const frame = run.byT[t];
-    if (!frame) continue;
-    renderFrame(frame, $(`cv-${side}`), run.meta);
-    readout(frame, `ro-${side}`);
-  }
+  renderFrame(state.baseline.byT[t], $("cv-baseline"), state.baseline.meta);
+  renderFrame(state.headline.byT[t], $("cv-headline"), state.headline.meta);
+  readout(state.baseline.byT[t], "ro-baseline");
+  readout(state.headline.byT[t], "ro-headline");
+  updatePlaque(t);
+  updateSummary(t);
+  drawCharts(t);
+}
+
+/* ----------------------------------------------------------------- B: play */
+/* setInterval (not rAF) so autoplay keeps advancing even when the tab is hidden;
+ * step = one day per tick, interval = 1000/speed ms (speed = days per second). */
+function stopPlay() {
+  state.playing = false;
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  $("play").textContent = "▶";
+}
+function scheduleTimer() {
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(() => {
+    const s = $("scrub");
+    const cur = parseInt(s.value, 10) + 1;
+    if (cur >= state.tMax) { s.value = state.tMax; draw(state.tMax); stopPlay(); return; }
+    s.value = cur; draw(cur);
+  }, Math.max(30, 1000 / state.speed));
+}
+function startPlay() {
+  const s = $("scrub");
+  if (parseInt(s.value, 10) >= state.tMax) s.value = state.tMin;
+  state.playing = true; $("play").textContent = "⏸";
+  scheduleTimer();
+}
+
+/* --------------------------------------------------------------- controls */
+function showTip(cv, key, e) {
+  const g = chartGeom(cv), rect = cv.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width * cv.width;
+  let day = Math.round(state.tMin + (px - PAD.l) / g.iw * (state.tMax - state.tMin));
+  day = Math.max(state.tMin, Math.min(state.tMax, day));
+  const b = at(state.baseline, key, day), h = at(state.headline, key, day);
+  const fmt = (v) => key === "ownerShare" ? Math.round(v * 100) + "%" : (v >= 100 ? Math.round(v) : v.toFixed(1));
+  const tip = $("tip");
+  tip.innerHTML = `день ${day}<br><span class="a">без: ${fmt(b)}</span> · <span class="b">с: ${fmt(h)}</span>`;
+  tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.hidden = false;
 }
 
 function wireControls() {
   const scrub = $("scrub");
   scrub.min = state.tMin; scrub.max = state.tMax; scrub.value = state.tMin;
-  scrub.addEventListener("input", () => draw(parseInt(scrub.value, 10)));
+  scrub.addEventListener("input", () => { stopPlay(); draw(parseInt(scrub.value, 10)); });
+
+  $("play").addEventListener("click", () => state.playing ? stopPlay() : startPlay());
+  const sp = $("speed");
+  sp.addEventListener("input", () => {
+    state.speed = parseInt(sp.value, 10); $("speed-val").textContent = state.speed + "×";
+    if (state.playing) scheduleTimer();          // apply new speed immediately
+  });
+
   const map = { "ly-food": "food", "ly-bodies": "bodies", "ly-owner": "owner", "ly-traj": "traj" };
-  for (const [id, key] of Object.entries(map)) {
-    $(id).addEventListener("change", (e) => {
-      state.layers[key] = e.target.checked;
-      draw(parseInt(scrub.value, 10));
-    });
+  for (const [id, k] of Object.entries(map)) {
+    $(id).addEventListener("change", (e) => { state.layers[k] = e.target.checked; draw(parseInt(scrub.value, 10)); });
+  }
+
+  const help = $("help-btn"), legend = $("legend");
+  help.addEventListener("click", () => {
+    legend.hidden = !legend.hidden;
+    help.setAttribute("aria-expanded", String(!legend.hidden));
+  });
+
+  for (const c of CHARTS) {
+    const cv = $(c.id);
+    cv.addEventListener("mousemove", (e) => showTip(cv, c.key, e));
+    cv.addEventListener("mouseleave", () => { $("tip").hidden = true; });
   }
 }
 
+/* -------------------------------------------------------------------- main */
 async function main() {
   try {
-    setStatus("loading runs…");
+    setStatus("загрузка прогонов…");
     const runs = await getJSON("/runs");
     const names = new Set(runs.map((r) => r.name));
-    if (!names.has(RUNS.baseline) || !names.has(RUNS.headline)) {
-      throw new Error(`expected ${RUNS.baseline} & ${RUNS.headline}; got [${[...names].join(", ")}]`);
-    }
-    setStatus("preloading frames…");
-    [state.baseline, state.headline] = await Promise.all([loadRun(RUNS.baseline), loadRun(RUNS.headline)]);
+    if (!names.has(RUNS.baseline) || !names.has(RUNS.headline))
+      throw new Error(`ожидались ${RUNS.baseline} и ${RUNS.headline}; получено [${[...names].join(", ")}]`);
 
+    setStatus("предзагрузка кадров…");
+    [state.baseline, state.headline] = await Promise.all([loadRun(RUNS.baseline), loadRun(RUNS.headline)]);
     const m = state.headline.meta;
-    state.gridR = m.R || 14; state.gridC = m.C || 14;
-    state.tMin = m.t_min; state.tMax = m.t_max;
+    state.gridR = m.R || 14; state.gridC = m.C || 14; state.tMin = m.t_min; state.tMax = m.t_max;
     computeScales();
     wireControls();
     draw(state.tMin);
-
-    const hf = state.headline.frames.length, bf = state.baseline.frames.length;
-    setStatus(`ready — baseline ${bf} frames, headline ${hf} frames; ` +
-      `day ${state.tMin}–${state.tMax}. Scrub to watch the stratum appear on the right, never on the left.`);
+    setStatus(`готово — по 300 кадров на прогон, дни ${state.tMin}–${state.tMax}. ` +
+      `Нажми ▶ или тяни ползунок: справа класс собственников появляется из ничего, слева — никогда.`);
   } catch (err) {
-    setStatus("error: " + err.message + " — did you run capture.py (headline + baseline) first?");
+    setStatus("ошибка: " + err.message + " — сначала запусти capture.py (headline + baseline)?");
     console.error(err);
   }
 }
