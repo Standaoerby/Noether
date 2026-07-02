@@ -49,6 +49,7 @@ header .sub #day { color: var(--ink); font-variant-numeric: tabular-nums; }
 .swatch.owner { background: transparent; border: 2px solid var(--gold); }
 .swatch.food { background: #2fbf57; }
 .swatch.line { background: linear-gradient(90deg, transparent, var(--gold), transparent); height: 3px; border-radius: 0; }
+.swatch.silence { background: #6d86a8; opacity: 0.7; }
 .radius-scale { display: flex; align-items: center; gap: 18px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
 .radius-scale .rc { display: inline-flex; align-items: center; gap: 7px; }
 .body-dot { display: inline-block; border-radius: 50%; background: var(--gold); }
@@ -73,6 +74,11 @@ header .sub #day { color: var(--ink); font-variant-numeric: tabular-nums; }
 .plaque .v .pct.warn { color: var(--warn); }
 .plaque .v .pct.gold { color: var(--gold); }
 .plaque-note { grid-column: 1 / -1; margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.probe-note {
+  margin: -6px 0 12px; padding: 8px 12px; font-size: 12.5px; color: var(--muted);
+  background: #10161d; border-left: 3px solid #6d86a8; border-radius: 0 8px 8px 0;
+}
+.probe-note b { color: var(--ink); }
 
 /* ---- controls ---- */
 #controls { display: flex; align-items: center; gap: 18px; margin: 14px 0 16px; flex-wrap: wrap; }

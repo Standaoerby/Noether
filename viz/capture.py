@@ -35,6 +35,7 @@ from sim_appropriation import (                                  # noqa: E402
 from sim_institution import run_institution, institution_fingerprint      # noqa: E402
 from sim_inheritance import run_inheritance, inheritance_fingerprint      # noqa: E402
 from sim_trade import run_trade, trade_fingerprint                        # noqa: E402
+from sim_legitimacy_probe import run_probe, probe_fingerprint             # noqa: E402
 
 from schema import frame_from_world, frames_to_jsonl, meta       # noqa: E402
 import json                                                      # noqa: E402
@@ -94,6 +95,22 @@ WORLDS = {
         "headline": dict(trade=True, trade_mode="market", price_frac=0.25,
                          appropriation=0.5, owner_policy="claim", arena_side=6),
         "baseline": dict(trade=False, appropriation=0.5, owner_policy="claim", arena_side=6),
+    },
+    # ВСТАВКА-29 probe (NOT a tower module — the tower stays closed at 28; this is the
+    # agenda column). It measures a DIFFERENT axis: challenge-suppression by legitimation.
+    # B0 is the probe's OWN self_check canon config verbatim (owner_policy="claim" + the
+    # sphere/salience-off overrides); the triple guard mirrors its self_check assert.
+    "legitimacy": {
+        "run": run_probe, "fp": probe_fingerprint,
+        "B0": dict(formula=False, sigma=0.0, enforce=False, appropriation=0.0,
+                   owner_policy="claim", arena_side=None, radius=GRID_DIAG + 1.0, K=None,
+                   lag=0, injection_strength=0.0, injectors=0),
+        "B0_anchor": CANON_COMM,                   # "a91480561b6de937"
+        "B0_guard": lambda w: (w._selfcensored == 0 and not w._legit),
+        "headline": dict(formula=True, legit_threshold=0.5, sigma=0.0, enforce=False,
+                         appropriation=0.5, owner_policy="claim", arena_side=6),
+        "baseline": dict(formula=False, sigma=0.0, enforce=False,
+                         appropriation=0.5, owner_policy="claim", arena_side=6),  # formula OFF
     },
 }
 

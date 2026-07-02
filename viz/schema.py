@@ -37,6 +37,13 @@ class SnapFrame:
     # snapshots that predate these fields loadable via SnapFrame(**json)):
     births: list = field(default_factory=list)   # [[oid, i, j], ...] appeared since prev
     deaths: list = field(default_factory=list)    # [[i, j], ...] vanished since prev
+    # agenda / legitimacy probe (ВСТАВКА-29) — a DIFFERENT axis (challenge-suppression, not
+    # ownership). Populated only for the probe; property worlds keep the 0/[] defaults, so
+    # PR#30 property snapshots still load via SnapFrame(**json):
+    selfcensored: int = 0     # accumulated challenges NEVER raised (the myth's work)
+    legit_events: int = 0     # accumulated legitimacy injections delivered
+    succeeded: int = 0        # accumulated successful ownership flips (E3 challenge axis)
+    legit_cells: list = field(default_factory=list)   # [[i, j, total_weight], ...] the myth map
 
 
 def frame_from_world(w, t, prev=None) -> SnapFrame:
@@ -63,6 +70,16 @@ def frame_from_world(w, t, prev=None) -> SnapFrame:
         births = [[a[0], a[1], a[2]] for a in agents if a[0] not in prev_oids]
         deaths = [[a[1], a[2]] for a in prev.agents if a[0] not in cur_oids]
 
+    # agenda probe fields: getattr so property worlds (no _selfcensored/_legit) don't fault.
+    legit = getattr(w, "_legit", None)
+    legit_cells = []
+    if legit:
+        agg = {}
+        for led in legit.values():                 # _legit: oid -> {cell: weight}
+            for cell, wt in led.items():
+                agg[cell] = agg.get(cell, 0.0) + wt
+        legit_cells = [[int(c[0]), int(c[1]), _f9(v)] for c, v in sorted(agg.items())]
+
     return SnapFrame(
         t=int(t),
         agents=agents,
@@ -72,6 +89,10 @@ def frame_from_world(w, t, prev=None) -> SnapFrame:
         appropriated_total=_f9(w._appropriated_total),
         births=births,
         deaths=deaths,
+        selfcensored=int(getattr(w, "_selfcensored", 0)),
+        legit_events=int(getattr(w, "_legit_events", 0)),
+        succeeded=int(getattr(w, "_challenge_succeeded", 0)),
+        legit_cells=legit_cells,
     )
 
 

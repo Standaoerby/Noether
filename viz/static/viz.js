@@ -28,6 +28,11 @@ const WORLD_META = {
     right: ["собственность + рынок", "богатый выкупает купчие · цена 0.25"],
     sub: "У обоих есть собственность. Справа включён рынок: самый богатый живой агент выкупает купчие у держателей.",
   },
+  legitimacy: {
+    left: ["формула выключена", "самоцензуры нет"],
+    right: ["формула включена", "порог 0.5 · миф давит вызов"],
+    sub: "У обоих есть собственность. Справа включена «политическая формула»: легитимность гасит готовность оспорить владение — молчание без налога и стражи.",
+  },
 };
 const CHARTS = [
   { id: "chart-share", key: "ownerShare", pct: true },
@@ -40,9 +45,9 @@ const state = {
   baseline: null, headline: null,
   gridR: 14, gridC: 14, tMin: 1, tMax: 300,
   maxPlant: 1e-9, maxBody: 1e-9,
-  layers: { food: true, bodies: true, owner: true, traj: false, flow: false },
+  layers: { food: true, bodies: true, owner: true, traj: false, flow: false, legit: true },
   speed: 4, playing: false, timer: null, world: "appropriation",
-  sweep: null, figTag: "appropriation", sweepWorld: "appropriation",
+  sweep: null, figTag: "appropriation", sweepWorld: "appropriation", probeMode: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -69,7 +74,8 @@ async function loadRun(runName) {
 
 /* A: derive the metric series once, per day */
 function buildSeries(frames) {
-  const s = { days: [], alive: [], sumBody: [], nOwners: [], ownerShare: [], tribute: [] };
+  const s = { days: [], alive: [], sumBody: [], nOwners: [], ownerShare: [], tribute: [],
+    selfcensored: [], succeeded: [] };
   for (const f of frames) {
     const owners = new Set(f.owner_ids || []);
     let sum = 0, ob = 0;
@@ -80,6 +86,8 @@ function buildSeries(frames) {
     s.nOwners.push(owners.size);
     s.ownerShare.push(sum > 0 ? ob / sum : 0);
     s.tribute.push(f.appropriated_total || 0);
+    s.selfcensored.push(f.selfcensored || 0);      // agenda probe (0 for property worlds)
+    s.succeeded.push(f.succeeded || 0);
   }
   return s;
 }
@@ -123,6 +131,18 @@ function renderFrame(frame, canvas, meta) {
   if (state.layers.food && meta && meta.oases) {
     ctx.strokeStyle = "rgba(120,220,140,0.45)"; ctx.lineWidth = 1.5;
     for (const [i, j] of meta.oases) ctx.strokeRect(j * cw + 1.5, i * ch + 1.5, cw - 3, ch - 3);
+  }
+
+  // agenda "silence" layer: the myth map (legit_cells) — slate overlay ∝ legitimacy weight.
+  // Empty-safe: property worlds have no legit_cells, so this simply does not draw.
+  const lc = frame.legit_cells;
+  if (state.layers.legit && lc && lc.length) {
+    let mw = 0; for (const c of lc) if (c[2] > mw) mw = c[2];
+    for (const [i, j, wt] of lc) {
+      const a = 0.10 + 0.55 * (mw > 0 ? wt / mw : 0);
+      ctx.fillStyle = `rgba(109,134,168,${a})`;
+      ctx.fillRect(j * cw, i * ch, cw, ch);
+    }
   }
 
   const cellOwner = frame.cell_owner || {};
@@ -243,6 +263,7 @@ function block(k, left, right, pct, cls) {
 }
 
 function updatePlaque(t) {
+  if (state.probeMode) return updateProbePlaque(t);
   const bA = at(state.baseline, "alive", t), hA = at(state.headline, "alive", t);
   const bM = at(state.baseline, "sumBody", t), hM = at(state.headline, "sumBody", t);
   const bS = at(state.baseline, "ownerShare", t), hS = at(state.headline, "ownerShare", t);
@@ -252,7 +273,26 @@ function updatePlaque(t) {
     Math.round(bS * 100) + "%", Math.round(hS * 100) + "%", "", "gold");
 }
 
+function updateProbePlaque(t) {
+  // probe axis: silence (self-censored), capacity intact, and share DILUTED (no stratum)
+  const bC = at(state.baseline, "selfcensored", t), hC = at(state.headline, "selfcensored", t);
+  const bA = at(state.baseline, "alive", t), hA = at(state.headline, "alive", t);
+  const bS = at(state.baseline, "ownerShare", t), hS = at(state.headline, "ownerShare", t);
+  $("plq-alive").innerHTML = block("подавлено вызовов", bC, hC, "", "gold");
+  $("plq-mass").innerHTML = block("живых (без цены базы)", bA, hA, fmtPct(bA, hA), "gold");
+  $("plq-share").innerHTML = block("доля у владельцев (не строит страту)",
+    Math.round(bS * 100) + "%", Math.round(hS * 100) + "%", "", "warn");
+}
+
 function updateSummary(t) {
+  if (state.probeMode) {
+    const hC = at(state.headline, "selfcensored", t), hA = at(state.headline, "alive", t);
+    const bS = at(state.baseline, "ownerShare", t), hS = at(state.headline, "ownerShare", t);
+    $("summary").textContent =
+      `День ${t}: формула подавила ${hC} вызовов, живых ${hA} (ёмкость цела — без налога). ` +
+      `Владельцы держат ${Math.round(hS * 100)}% массы — не выше базы ${Math.round(bS * 100)}%: молчание, не страта.`;
+    return;
+  }
   const bA = at(state.baseline, "alive", t);
   const hO = at(state.headline, "nOwners", t), hS = at(state.headline, "ownerShare", t), hA = at(state.headline, "alive", t);
   $("summary").textContent =
@@ -271,6 +311,7 @@ function draw(t) {
   updatePlaque(t);
   updateSummary(t);
   drawCharts(t);
+  if (state.probeMode) drawChart($("chart-censor"), "selfcensored", t);   // silence timeline
 }
 
 /* ----------------------------------------------------------------- B: play */
@@ -322,7 +363,7 @@ function wireControls() {
     if (state.playing) scheduleTimer();          // apply new speed immediately
   });
 
-  const map = { "ly-food": "food", "ly-bodies": "bodies", "ly-owner": "owner", "ly-traj": "traj", "ly-flow": "flow" };
+  const map = { "ly-food": "food", "ly-bodies": "bodies", "ly-owner": "owner", "ly-traj": "traj", "ly-flow": "flow", "ly-legit": "legit" };
   for (const [id, k] of Object.entries(map)) {
     $(id).addEventListener("change", (e) => { state.layers[k] = e.target.checked; draw(parseInt(scrub.value, 10)); });
   }
@@ -378,12 +419,15 @@ function runFromLive(resp) {
 
 function setLiveTitles(w, rho, seed, arena, verbOn) {
   const wm = WORLD_META[w];
-  $("left-title").textContent = "контроль (механизм выкл)"; $("left-cfg").textContent = "";
+  const probe = w === "legitimacy";
+  const doseName = probe ? "порог" : "ρ";
+  $("left-title").textContent = probe ? "формула выключена" : "контроль (механизм выкл)";
+  $("left-cfg").textContent = "";
   $("right-title").textContent = verbOn ? (wm ? wm.right[0] : w) : "контроль";
-  $("right-cfg").textContent = `живой прогон · ρ=${(+rho).toFixed(1)}`;
+  $("right-cfg").textContent = `живой прогон · ${doseName}=${(+rho).toFixed(1)}`;
   $("contrast-sub").textContent =
     `Живой прогон «${w}»: сид ${seed}, арена ${arena || "открытая"}. ` +
-    `Слева контроль, справа механизм при дозе ρ=${(+rho).toFixed(1)} — посчитано на бэке под 4-гейтом.`;
+    `Слева контроль, справа механизм при ${doseName}=${(+rho).toFixed(1)} — посчитано на бэке под 4-гейтом.`;
   $("world-hint").textContent = "живой прогон (гейт-защищён)";
 }
 
@@ -402,6 +446,7 @@ async function sbRun() {
     const m = state.headline.meta;
     state.gridR = m.R || 14; state.gridC = m.C || 14; state.tMin = hi.t_min; state.tMax = hi.t_max;
     computeScales();
+    applyProbeUI(w === "legitimacy");
     setLiveTitles(w, rho, seed, arena, verbOn);
     const scrub = $("scrub"); scrub.min = state.tMin; scrub.max = state.tMax; scrub.value = state.tMin;
     draw(state.tMin);
@@ -431,7 +476,17 @@ async function sbSweep() {
 }
 
 const SW_PAD = { l: 38, r: 12, t: 12, b: 26 };
+const SWEEP_LEGEND = {
+  property: '<span class="ln headline">— доля богатства (owner share)</span>'
+    + '<span class="ln baseline">— живых (alive)</span>'
+    + '<span class="ln birth">— рождений (оборот↑)</span><span class="ln death">— смертей (оборот↓)</span>',
+  legitimacy: '<span class="ln" style="color:#6d86a8">— подавлено вызовов (self-censored)</span>'
+    + '<span class="ln baseline">— живых (alive · база цела)</span>'
+    + '<span class="ln death">— переворотов владения (succeeded)</span>',
+};
 function drawSweep(points) {
+  const probe = state.sweepWorld === "legitimacy";
+  $("sweep-legend").innerHTML = probe ? SWEEP_LEGEND.legitimacy : SWEEP_LEGEND.property;
   const cv = $("sweep"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height, iw = W - SW_PAD.l - SW_PAD.r, ih = H - SW_PAD.t - SW_PAD.b;
   ctx.clearRect(0, 0, W, H);
@@ -440,6 +495,8 @@ function drawSweep(points) {
   const Y = v => SW_PAD.t + ih - Math.max(0, Math.min(1, v)) * ih;
   const maxAlive = Math.max(1, ...points.map(p => p.alive));
   const maxTurn = Math.max(1, ...points.map(p => Math.max(p.births_total, p.deaths_total)));
+  const maxCensor = Math.max(1, ...points.map(p => p.selfcensored || 0));
+  const maxSucc = Math.max(1, ...points.map(p => p.succeeded || 0));
 
   ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(SW_PAD.l, Y(0)); ctx.lineTo(W - SW_PAD.r, Y(0)); ctx.stroke();
@@ -447,9 +504,13 @@ function drawSweep(points) {
   ctx.textAlign = "right"; ctx.fillText("1.0", SW_PAD.l - 4, SW_PAD.t + 8); ctx.fillText("0", SW_PAD.l - 4, Y(0));
   ctx.textAlign = "center";
   for (const r of xs) ctx.fillText(r.toFixed(1), X(r), H - 10);
-  ctx.textAlign = "left"; ctx.fillText("ρ (доза) →", SW_PAD.l, H - 2);
+  ctx.textAlign = "left"; ctx.fillText(probe ? "порог легитимации →" : "ρ (доза) →", SW_PAD.l, H - 2);
 
-  const series = [
+  const series = probe ? [
+    [p => (p.selfcensored || 0) / maxCensor, "#6d86a8"],   // silence
+    [p => p.alive / maxAlive, "#6cb0ea"],                  // capacity (flat-high)
+    [p => (p.succeeded || 0) / maxSucc, "#f04646"],        // challenges that survived
+  ] : [
     [p => (p.owner_share || 0), "#f4c542"],      // absolute 0..1
     [p => p.alive / maxAlive, "#6cb0ea"],
     [p => p.births_total / maxTurn, "#3ce66e"],
@@ -474,8 +535,13 @@ function showSweepTip(e) {
   let best = state.sweep[0], bd = Infinity;
   for (const p of state.sweep) { const d = Math.abs(p.rho - rho); if (d < bd) { bd = d; best = p; } }
   const tip = $("sweep-tip");
-  tip.innerHTML = `ρ=${best.rho.toFixed(1)}<br><span class="b">доля ${(best.owner_share || 0).toFixed(3)}</span> · <span class="a">живых ${best.alive}</span>`
-    + `<br>рожд ${best.births_total} · смерт ${best.deaths_total}`;
+  if (state.sweepWorld === "legitimacy") {
+    tip.innerHTML = `порог=${best.rho.toFixed(2)}<br>подавлено ${best.selfcensored || 0} · <span class="a">живых ${best.alive}</span>`
+      + `<br>переворотов ${best.succeeded || 0}`;
+  } else {
+    tip.innerHTML = `ρ=${best.rho.toFixed(1)}<br><span class="b">доля ${(best.owner_share || 0).toFixed(3)}</span> · <span class="a">живых ${best.alive}</span>`
+      + `<br>рожд ${best.births_total} · смерт ${best.deaths_total}`;
+  }
   tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.hidden = false;
 }
 
@@ -505,6 +571,13 @@ function exportSweep() {
 }
 
 /* ------------------------------------------------------------- world switch */
+function applyProbeUI(on) {
+  state.probeMode = on;
+  $("ly-legit-wrap").hidden = !on;
+  $("probe-note").hidden = !on;
+  $("chart-censor-wrap").hidden = !on;
+}
+
 function applyWorldMeta(w) {
   const wm = WORLD_META[w]; if (!wm) return;
   $("left-title").textContent = wm.left[0]; $("left-cfg").textContent = wm.left[1];
@@ -524,6 +597,7 @@ async function loadWorld(w) {
     state.gridR = m.R || 14; state.gridC = m.C || 14; state.tMin = m.t_min; state.tMax = m.t_max;
     computeScales();
     applyWorldMeta(w);
+    applyProbeUI(w === "legitimacy");
     const scrub = $("scrub");
     scrub.min = state.tMin; scrub.max = state.tMax; scrub.value = state.tMin;
     draw(state.tMin);
