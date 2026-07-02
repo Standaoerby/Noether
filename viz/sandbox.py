@@ -40,6 +40,7 @@ DOSE = {
     "inheritance": "appropriation",
     "institution": "sigma",
     "trade": "price_frac",
+    "legitimacy": "legit_threshold",   # PR-32: the agenda probe's dose is the silence threshold
 }
 
 _LOCK = threading.Lock()      # WORLDS mutation + capture serialized (local single-user tool)

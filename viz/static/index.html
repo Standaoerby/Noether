@@ -26,6 +26,7 @@
         <li><span class="swatch food"></span> <b>зелёная заливка</b> — еда (ярче = больше). Оазисы кормят мир.</li>
         <li><span class="swatch line"></span> <b>линии</b> — пути, по которым агенты ходили («пути агентов»).</li>
         <li><span class="dot birth"></span> <b>зелёная вспышка</b> / <span class="dot death"></span> <b>красная</b> — рождение / смерть за этот день (слой «оборот»). Насос жизни: у сытых владельцев рождений больше.</li>
+        <li><span class="swatch silence"></span> <b>сине-серая заливка</b> — «карта мифа» (слой «легитимность»): где легитимность давит и вызов не поднимается. Ярче = больше подавления. Только в мире легитимации.</li>
         <li>Слева собственность <b>выключена</b> — сравнение с миром, где её нет.</li>
         <li><b>Что смотреть:</b> справа масса стекается к немногим (клетки желтеют, владельцы жиреют) и живых становится меньше. Слева все живут ровно и никто не растёт.</li>
       </ul>
@@ -46,6 +47,13 @@
     <p class="plaque-note">одна и та же арена и один и тот же случай — разница только в механизме, включённом справа.</p>
   </section>
 
+  <!-- PR-32: probe framing note (H1 ≠ H2) — shown only for the legitimacy probe -->
+  <p id="probe-note" class="probe-note" hidden>
+    Формула гасит <b>вызов</b> (оспаривается ли владение), а не строит <b>страту</b> (кто богат).
+    Контраст с институтом-налогом (мод-24): тот давит вызов ценой вымирания базы (≈2 живых);
+    формула — без цены базы (≈100 живых). Это раскол H1&nbsp;✓&nbsp;/&nbsp;H2&nbsp;NULL: «покупает молчание, не страту».
+  </p>
+
   <!-- B. Play + speed, slider, layer toggles -->
   <section id="controls">
     <button id="play" class="play-btn" aria-label="играть">▶</button>
@@ -60,6 +68,7 @@
       <label><input type="checkbox" id="ly-owner" checked /> владение</label>
       <label><input type="checkbox" id="ly-traj" /> пути агентов</label>
       <label><input type="checkbox" id="ly-flow" /> оборот</label>
+      <label id="ly-legit-wrap" hidden><input type="checkbox" id="ly-legit" checked /> легитимность <span class="tech">(карта мифа)</span></label>
     </div>
   </section>
 
@@ -72,6 +81,7 @@
         <option value="institution">институт (24)</option>
         <option value="inheritance">наследование (25)</option>
         <option value="trade">рынок (27)</option>
+        <option value="legitimacy">легитимация (agenda · ВСТАВКА-29)</option>
       </select>
     </label>
     <label>извлечение <b>ρ</b>
@@ -105,6 +115,7 @@
         <option value="institution">институт (24)</option>
         <option value="inheritance">наследование (25)</option>
         <option value="trade">рынок (27)</option>
+        <option value="legitimacy">легитимация (agenda · ВСТАВКА-29)</option>
       </select>
     </label>
     <span id="world-hint" class="world-hint"></span>
@@ -130,7 +141,7 @@
       <button id="ex-sweep" class="ex-btn">свип PNG</button>
     </div>
     <canvas id="sweep" width="960" height="240"></canvas>
-    <div class="chart-legend">
+    <div class="chart-legend" id="sweep-legend">
       <span class="ln headline">— доля богатства (owner share)</span>
       <span class="ln baseline">— живых (alive)</span>
       <span class="ln birth">— рождений (оборот↑)</span>
@@ -147,6 +158,8 @@
       <canvas id="chart-alive" width="760" height="150"></canvas></figure>
     <figure class="chart"><figcaption>Всего живой массы, кг <span class="unit">(Σ body)</span></figcaption>
       <canvas id="chart-mass" width="760" height="150"></canvas></figure>
+    <figure class="chart" id="chart-censor-wrap" hidden><figcaption>Подавлено вызовов мифом <span class="unit">(self-censored)</span></figcaption>
+      <canvas id="chart-censor" width="760" height="150"></canvas></figure>
     <div class="chart-legend">
       <span class="ln baseline">— мир без собственности</span>
       <span class="ln headline">— мир с собственностью</span>

@@ -38,7 +38,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # Live-runnable worlds, listed for /health WITHOUT importing capture (keeps /health canon-free).
 # The authoritative registry is capture.WORLDS, validated inside /run (which imports it lazily).
-LIVE_WORLDS = ("appropriation", "institution", "inheritance", "trade")
+LIVE_WORLDS = ("appropriation", "institution", "inheritance", "trade", "legitimacy")
 
 
 def _verb_bool(v) -> bool:
@@ -72,6 +72,9 @@ def _endpoint_metrics(res):
         "sum_body": sum(a[3] for a in last.agents),
         "births_total": sum(len(f["births"]) for f in frames),
         "deaths_total": sum(len(f["deaths"]) for f in frames),
+        # agenda probe axis (0 for property worlds): challenge suppression by legitimation
+        "selfcensored": last.selfcensored,
+        "succeeded": last.succeeded,
     }
 
 
