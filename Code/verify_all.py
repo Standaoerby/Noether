@@ -45,10 +45,14 @@ The tower, bottom to top:
   sim_trade ownership traded between living     : richest buyer buys a deed from its holder — market vs gift: does liquidity concentrate or equalize?
   sim_synthesis the keystone                     : inheritance x exclusion x trade at once — do the three property verbs compound, or interfere?
 
+PROBES (ВСТАВКА-29-class, read-only forensics over the closed tower; NOT modules):
+  sim_gradient_probe gradient revision           : tail-shape (mod-23) + K-window (mod-20) — Pareto 80/20 does not emerge; attention scarcity is a dose curve with a finite window
+
 Run:  python3 verify_all.py
 """
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -83,6 +87,9 @@ MODULES = [
     ("sim_exclusion", "denial of access: owner bars non-owners from its cell — no collapse, but no extra stratification"),
     ("sim_trade", "ownership traded between the living: richest buyer buys a deed — market vs gift, does liquidity concentrate or equalize?"),
     ("sim_synthesis", "the keystone: inheritance x exclusion x trade at once — do the three property verbs compound, or interfere?"),
+    # ВСТАВКА-29-class PROBES — read-only forensics over existing worlds (NOT tower modules;
+    # the tower stays closed at 28). Included so the book's numbers stand on verify_all.
+    ("sim_gradient_probe", "gradient revision (PROBE, read-only): tail-shape (mod-23, no Pareto 80/20) + K-window (mod-20, dose curve not zero)"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
@@ -94,8 +101,13 @@ TIMEOUT = 600
 
 def run_once(module):
     t0 = time.time()
+    # Force UTF-8 in the child so its ✓ / arrows / Cyrillic don't crash on the Windows
+    # console codepage (cp1251), which would otherwise fail the child before it prints.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     proc = subprocess.run([sys.executable, f"{module}.py"],
-                          capture_output=True, text=True, timeout=TIMEOUT)
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
+                          env=env, timeout=TIMEOUT)
     return proc.returncode, proc.stdout, proc.stderr, time.time() - t0
 
 
