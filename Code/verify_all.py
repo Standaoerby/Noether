@@ -90,6 +90,12 @@ MODULES = [
     # ВСТАВКА-29-class PROBES — read-only forensics over existing worlds (NOT tower modules;
     # the tower stays closed at 28). Included so the book's numbers stand on verify_all.
     ("sim_gradient_probe", "gradient revision (PROBE, read-only): tail-shape (mod-23, no Pareto 80/20) + K-window (mod-20, dose curve not zero)"),
+    # STAGE-3 COLUMN — the subject layer above the closed tower (NOT a tower module,
+    # NOT a probe). Polis(AppropriationWorld) + thick pawn + Demerzel (deterministic voice
+    # of god via salience). Asleep (t_awaken=inf, no directive) it is byte-identical to the
+    # tower canon; the voice never touches mass. Lives in ../stage3 (like viz/).
+    ("../stage3/run_polis", "STAGE-3 mod A (COLUMN): Polis + thick pawn + Demerzel voice — sleeping≡canon, voice propagates & is attributed on the living window, mass-neutral"),
+    ("../stage3/run_polis_llm", "STAGE-3 mod B (COLUMN): living mind (Claude API) — world deterministic-from-log, mind pluggable, inert without key"),
 ]
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
