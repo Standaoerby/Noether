@@ -199,3 +199,62 @@ def implant_absolute(w, cell) -> dict:
             spread += 1
     return {"infected_total": total, "infected_spread": spread,
             "infected_injected": injected, "pop": len(w.pop)}
+
+
+# --------------------------------------------------------------------------- #
+#  mod C (дао/ученик): succession + intent-survival metrics                     #
+# --------------------------------------------------------------------------- #
+def succession_outcome(w) -> dict:
+    """The 2x2 outcome of §6 read off the world (mod C runs only): what survived the
+    FIRST teacher — the дао (practice), the голос (voice), both, or nothing — plus the
+    line's depth and history. `outcome=None` means the succession point never came
+    (the teacher outlived the run)."""
+    glog = getattr(w, "_groom_log", []) or []
+    ritual_attempts = sum(1 for (_t, e, _d) in glog if e.startswith("ritual_begin"))
+    ritual_broken = sum(1 for (_t, e, _d) in glog if e == "ritual_broken")
+    cand_churn = sum(1 for (_t, e, _d) in glog if e in ("candidate_died", "rejected"))
+    return {"outcome": getattr(w, "_outcome", None),
+            "depth": getattr(w, "_depth", 0),
+            "carriers": list(getattr(w, "_carriers", [])),
+            "living_window": w.living_window(),
+            "line_window": (w.line_window() if hasattr(w, "line_window") else None),
+            "ritual_attempts": ritual_attempts,
+            "ritual_broken": ritual_broken,
+            "candidate_churn": cand_churn,
+            "n_groom_events": len(glog)}
+
+
+def survival_excess(samples_on, samples_off, death_t, horizon=120):
+    """Intent survival past the ORIGIN teacher's death, against a matched OFF world.
+
+    samples_*: [(t, infected_total, infected_spread, pop), ...] sampled by the RUNNER
+    (the world is never instrumented — sampling is external and read-only).
+    excess(t) = infected_total_ON(t) - infected_total_OFF(t), evaluated on the shared
+    sample grid over [death_t, death_t + horizon].
+
+    Returns:
+      e0        excess at the death tick (the inheritance the teacher left)
+      end       excess at the horizon (what remains)
+      auc       summed excess over the window (total posthumous presence)
+      half_life first (t - death_t) where excess <= e0/2  (None = never halved)
+      n         number of shared samples in the window
+    mod A measured the обрыв baseline: Δ +0.246 -> +0.164 -> background — this metric
+    makes the three arms (обрыв / random / vector) comparable on one ruler."""
+    if death_t is None:
+        return {"e0": float("nan"), "end": float("nan"), "auc": float("nan"),
+                "half_life": None, "n": 0}
+    off = {t: tot for (t, tot, _s, _p) in samples_off}
+    ex = [(t, tot - off[t]) for (t, tot, _s, _p) in samples_on
+          if death_t <= t <= death_t + horizon and t in off]
+    if not ex:
+        return {"e0": float("nan"), "end": float("nan"), "auc": float("nan"),
+                "half_life": None, "n": 0}
+    e0 = float(ex[0][1])
+    half = None
+    if e0 > 0:
+        for (t, v) in ex:
+            if v <= e0 / 2.0:
+                half = t - death_t
+                break
+    return {"e0": e0, "end": float(ex[-1][1]), "auc": float(sum(v for (_t, v) in ex)),
+            "half_life": half, "n": len(ex)}

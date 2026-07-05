@@ -65,6 +65,10 @@ class PolisConfig:
     # read from a prior LIVE run so the world replays byte-identically without calling the LLM.
     policy: object = None
     replay_log: dict = None
+    # mod C (дао/ученик): the god's standing meta-order (GROOM_SUCCESSOR as a working
+    # layer). None => the succession machinery is entirely absent => byte-identical to
+    # mod A/B (gate C0). See stage3/succession.py.
+    groom: object = None
     # perception preset — MUST match the headline appropriation run so the sleeping Polis
     # is byte-identical (run_appropriation defaults to the salience preset RAD/KK/LAG,
     # NOT AppropriationWorld's bare defaults). radius=RAD(0.0), K=KK(8), lag=LAG(1).
@@ -99,6 +103,17 @@ class Polis(AppropriationWorld):
         self._policy = cfg.policy
         self._decision_log = {}          # t -> [(listener_oid, [i,j], amount), ...]  (for replay)
         self._replay_log = cfg.replay_log  # if given, decisions are READ from here (no LLM)
+        # mod C (дао/ученик) state — inert when cfg.groom is None (gate C0):
+        self._groom = None            # active GroomState (one machine per line head)
+        self._voice_oid = None        # current voice holder (the origin, then successors)
+        self._dao_carrier = None      # voiceless carrier of the practice (дао without god)
+        self._learned = {}            # oid -> LearnedDao
+        self._succ_reign = 0          # ticks under the current successor (stutter phase)
+        self._depth = 0               # succession depth (0 = origin only)
+        self._outcome = None          # the 2x2 label fixed at the FIRST succession point
+        self._carriers = []           # (t, oid, kind, trained) — line history
+        self._groom_log = []          # (t, event, data)
+        self._line_death_t = None     # tick the LINE fell silent (no emitter left)
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
         # appropriation run, else the sleeping Polis is not byte-identical to it.
@@ -159,6 +174,12 @@ class Polis(AppropriationWorld):
     # ---- the step seam ----------------------------------------------------- #
     def step(self):
         super().step()                         # full tower + appropriation, unchanged
+        if self.cfg.groom is None:
+            self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
+        else:
+            self._step_voice_modc()            # mod C: дао/ученик succession layer
+
+    def _step_voice_moda(self):
         # mortality check for an already-awake Demerzel
         if self._awake and self._death_t is None:
             dem = next((a for a in self.pop if a.oid == self._demerzel_oid), None)
@@ -198,6 +219,267 @@ class Polis(AppropriationWorld):
                                     self._directive.target, len(emissions),
                                     round(om_share, 6)))
 
+
+    # ---- mod C: дао/ученик — the succession layer (cfg.groom is not None) --- #
+    def _step_voice_modc(self):
+        """The mod C step: same voice physics, plus the succession machine. One-emitter
+        invariant: at any tick at most ONE of {voice holder, дао carrier} emits. The
+        substrate is never touched — teaching and practice ride the same legal salience
+        ledger. See stage3/succession.py for the mechanics and the privilege firewall."""
+        from .succession import GroomState, teach_cell, advance_groom
+        g = self.cfg.groom
+        # awaken exactly as mod A; arm the groom machine at the same tick
+        if not self._awake:
+            if self.t >= self._t_awaken:
+                if not self._awaken():
+                    return
+                self._voice_oid = self._demerzel_oid
+                self._groom = GroomState(teacher_oid=self._voice_oid, started_t=self.t)
+                self._gev("groom_issued", {"teacher": self._voice_oid})
+            else:
+                return
+        alive = {a.oid for a in self.pop}
+        # deaths of carriers (voice or дао): outcome resolution + line bookkeeping
+        self._resolve_deaths_modc(alive)
+        # emissions from the single active emitter
+        ems, taught, head, phase, kind = self._emit_modc(alive)
+        if head is not None:
+            self._decision_log[self.t] = [(oid, [c[0], c[1]], amt)
+                                          for (oid, c, amt) in ems]
+            for (listener_oid, cell, amount) in ems:
+                led = self.injected.setdefault(listener_oid, {})
+                led[cell] = led.get(cell, 0.0) + amount
+            om_share = self._owner_share_now()
+            goal = self._directive.goal if self._directive is not None else None
+            tgt = self._directive.target if self._directive is not None else None
+            self._voice_log.append((self.t, goal, tgt, len(ems),
+                                    round(om_share, 6), head, phase, kind))
+        # advance the machine (the taught flag is of THIS tick)
+        st = self._groom
+        if st is not None and head is not None and st.teacher_oid == head:
+            if head == self._voice_oid:
+                icell = teach_cell(self, self._directive)
+            else:
+                L = self._learned.get(head)
+                icell = tuple(L.cell) if (L is not None and L.cell) else None
+            hb = next((a for a in self.pop if a.oid == head), None)
+            desperate = (hb is not None and
+                         (hb.body < g.despair_body
+                          or hb.age >= self.pawn(head)._a_max - g.despair_age))
+            ev = advance_groom(self, st, g, head, head == self._voice_oid,
+                               taught, icell, head_desperate=desperate)
+            if ev == "MOVED":
+                self._do_ritual_move(st)
+            elif ev is not None:
+                self._gev(ev, {"head": head, "cand": st.candidate_oid,
+                               "dao": st.dao_progress, "phase": st.phase})
+        # voice lifecycle: strength ON while an emitter exists, else the world is silent
+        has_emitter = ((self._voice_oid is not None and self._voice_oid in alive)
+                       or (self._dao_carrier is not None
+                           and self._dao_carrier in alive))
+        self.injection_strength = (float(self.cfg.voice_strength)
+                                   if has_emitter else 0.0)
+        if (self._line_death_t is None and self._issued_t is not None
+                and not has_emitter):
+            self._line_death_t = self.t
+
+    def _resolve_deaths_modc(self, alive):
+        """Carrier mortality, mod C semantics. The ORIGIN's death always closes the mod-A
+        living window (attribution semantics unchanged). A dying voice holder LOSES the
+        voice (it moves only by ritual) — but a TRAINED heir inherits the дао; a dying
+        дао carrier passes the practice only to his own trained heir. The 2x2 outcome is
+        fixed at the FIRST succession point (MOVED or unmoved death)."""
+        from .succession import OUT_DAO, OUT_NONE
+        # (a) origin body: closes the mod-A living window whenever it dies
+        if self._awake and self._death_t is None:
+            dem = next((a for a in self.pop if a.oid == self._demerzel_oid), None)
+            pw = self.pawn(self._demerzel_oid) if dem is not None else None
+            if dem is None or (pw is not None and pw.is_dead_by_age(dem)):
+                self._death_t = self.t
+        # (b) the current voice holder
+        if self._voice_oid is not None:
+            v = next((a for a in self.pop if a.oid == self._voice_oid), None)
+            pw = self.pawn(self._voice_oid) if v is not None else None
+            if v is None or (pw is not None and pw.is_dead_by_age(v)):
+                st = (self._groom if (self._groom is not None and
+                                      self._groom.teacher_oid == self._voice_oid)
+                      else None)
+                self._gev("voice_died", {"oid": self._voice_oid})
+                trained_heir = (st is not None and st.dao_done
+                                and st.candidate_oid in alive)
+                if self._outcome is None:
+                    self._outcome = OUT_DAO if trained_heir else OUT_NONE
+                self._voice_oid = None
+                if trained_heir:
+                    self._install_dao_carrier(st)
+                else:
+                    self._groom = None
+        # (c) the дао carrier (voiceless line)
+        elif self._dao_carrier is not None:
+            c = next((a for a in self.pop if a.oid == self._dao_carrier), None)
+            pw = self.pawn(self._dao_carrier) if c is not None else None
+            if c is None or (pw is not None and pw.is_dead_by_age(c)):
+                st = (self._groom if (self._groom is not None and
+                                      self._groom.teacher_oid == self._dao_carrier)
+                      else None)
+                self._gev("carrier_died", {"oid": self._dao_carrier})
+                trained_heir = (st is not None and st.dao_done
+                                and st.candidate_oid in alive)
+                self._dao_carrier = None
+                if trained_heir:
+                    self._install_dao_carrier(st)
+                else:
+                    self._groom = None
+
+    def _emit_modc(self, alive):
+        """The single emitter's emissions this tick. Returns (emissions, taught, head,
+        phase, kind). Source priority for the ORIGIN is exactly mod A/B (replay ->
+        policy -> deterministic means); successors run the SAME directive through their
+        OWN vector + stutter; a дао carrier repeats his learned practice by his own
+        will. On replay everything (incl. teaching) is read from the log and the taught
+        flag is DERIVED from the logged set — byte-identical worlds (gate C2)."""
+        from .succession import (teach_step, teach_cell, carrier_means, stutter,
+                                 TEACH as PH_TEACH, RITUAL as PH_RITUAL)
+        g, st = self.cfg.groom, self._groom
+        taught = False
+        if (self._voice_oid is not None and self._voice_oid in alive
+                and self._directive is not None):
+            head, kind = self._voice_oid, "voice"
+        elif self._dao_carrier is not None and self._dao_carrier in alive:
+            head, kind = self._dao_carrier, "dao"
+        else:
+            return [], False, None, None, None
+        phase = st.phase if (st is not None and st.teacher_oid == head) else "-"
+        in_ritual = (st is not None and st.teacher_oid == head
+                     and st.phase == PH_RITUAL)
+        if kind == "voice":
+            icell = teach_cell(self, self._directive)
+        else:
+            L = self._learned.get(head)
+            icell = tuple(L.cell) if (L is not None and L.cell) else None
+        can_teach = (head == self._demerzel_oid
+                     or bool(self._learned.get(head) is not None
+                             and self._learned[head].can_teach))
+        teaching = (not in_ritual and can_teach and st is not None
+                    and st.teacher_oid == head and st.phase == PH_TEACH
+                    and g.teach_slots > 0 and st.candidate_oid is not None
+                    and icell is not None)
+
+        # 1) replay takes absolute priority — the world replays byte-identical
+        if self._replay_log is not None and self.t in self._replay_log:
+            ems = [(oid, tuple(cell), amt)
+                   for (oid, cell, amt) in self._replay_log[self.t]]
+            if teaching:
+                taught = any(e[0] == st.candidate_oid
+                             and tuple(e[1]) == tuple(icell) for e in ems)
+            if head != self._demerzel_oid:
+                self._succ_reign += 1
+            return ems, taught, head, phase, ("silent" if in_ritual else kind)
+
+        # 2) live
+        if in_ritual:
+            return [], False, head, phase, "silent"     # silence: the ritual's price
+        if kind == "voice":
+            if head == self._demerzel_oid:
+                # the ORIGIN: exact mod A/B source priority; NEVER stuttered (the god
+                # picked this body directly — there was no transfer)
+                pers = self._demerzel_personality
+                if self._policy is not None:
+                    ems = self._policy.choose(self, head, pers,
+                                              self._directive, self._decision_log)
+                else:
+                    ems = choose_means(self, head, pers, self._directive)
+            else:
+                # a successor executes the SAME directive with HIS OWN vector
+                pers = self.pawn(head).personality
+                ems = choose_means(self, head, pers, self._directive)
+                if g.stutter_on:
+                    L = self._learned.get(head)
+                    ems = stutter(ems, self, head, pers,
+                                  trained=bool(L is not None and L.can_teach),
+                                  reign_tick=self._succ_reign)
+                self._succ_reign += 1
+        else:
+            # дао carrier: the practice by his own will (trained by construction)
+            pers = self.pawn(head).personality
+            ems = carrier_means(self, head, pers, self._learned.get(head))
+            if g.stutter_on:
+                ems = stutter(ems, self, head, pers, trained=True,
+                              reign_tick=self._succ_reign)
+            self._succ_reign += 1
+        # teaching diverts listener slots from the goal to the apprentice
+        if teaching:
+            tch = teach_step(self, head, st.candidate_oid, icell,
+                             self.inject_amount * (0.5 + pers.deception_lean),
+                             g.teach_dist)
+            if tch:
+                keep = max(0, len(ems) - g.teach_slots)
+                ems = [e for e in ems if e[0] != st.candidate_oid][:keep] + tch
+                taught = True
+        return ems, taught, head, phase, kind
+
+    def _do_ritual_move(self, st):
+        """The ritual completes: the god relocates into the apprentice's body. Longevity
+        moves WITH the voice (the god sustains the vessel); the apprentice keeps his OWN
+        personality vector — that is the whole experiment. An untrained successor (the
+        early-ritual gamble) cannot teach: his line ends with him."""
+        from .succession import LearnedDao, GroomState, OUT_FULL, OUT_VOICE
+        from .directive import IMPLANT
+        from .pawn import Pawn
+        succ = st.candidate_oid
+        pers = self.pawn(succ).personality
+        self._pawns[succ] = Pawn(succ, pers, self.cfg.a_mat, self.cfg.a_old,
+                                 self.cfg.demerzel_a_max)
+        old = self._voice_oid
+        self._voice_oid = succ
+        cell = None
+        if self._directive is not None and self._directive.goal == IMPLANT:
+            c = self._directive.payload.get("cell")
+            cell = tuple(c) if c else None
+        self._learned[succ] = LearnedDao(goal=self._directive.goal, cell=cell,
+                                         target=self._directive.target,
+                                         can_teach=bool(st.dao_done))
+        self._succ_reign = 0
+        self._depth += 1
+        if self._outcome is None:                 # the headline 2x2: first succession
+            self._outcome = OUT_FULL if st.dao_done else OUT_VOICE
+        self._carriers.append((self.t, succ, "voice", bool(st.dao_done)))
+        self._groom = (GroomState(teacher_oid=succ, started_t=self.t)
+                       if (self.cfg.groom.chain and st.dao_done) else None)
+        self._gev("voice_moved", {"from": old, "to": succ,
+                                  "trained": bool(st.dao_done), "depth": self._depth})
+
+    def _install_dao_carrier(self, st):
+        """A trained heir inherits the дао (no voice: the god died with the old vessel).
+        The practice is his own will now; if the chain is on, he grooms the next link."""
+        from .succession import LearnedDao, GroomState
+        from .directive import IMPLANT
+        heir = st.candidate_oid
+        self._dao_carrier = heir
+        self._depth += 1
+        src = self._learned.get(st.teacher_oid)
+        if src is not None:
+            goal, cell, tgt = src.goal, (tuple(src.cell) if src.cell else None), src.target
+        else:
+            goal, tgt = self._directive.goal, self._directive.target
+            c = self._directive.payload.get("cell") if goal == IMPLANT else None
+            cell = tuple(c) if c else None
+        self._learned[heir] = LearnedDao(goal=goal, cell=cell, target=tgt,
+                                         can_teach=True)
+        self._carriers.append((self.t, heir, "dao", True))
+        self._succ_reign = 0
+        self._groom = (GroomState(teacher_oid=heir, started_t=self.t)
+                       if self.cfg.groom.chain else None)
+        self._gev("dao_inherited", {"to": heir, "depth": self._depth})
+
+    def _gev(self, event, data=None):
+        self._groom_log.append((self.t, event, dict(data or {})))
+
+    def line_window(self):
+        """The LINE's window [issued_t, line_death_t]: when the succession line fell
+        silent (no emitter left). living_window stays the FIRST teacher's (mod A)."""
+        return (self._issued_t, self._line_death_t)
+
     # ---- helpers ----------------------------------------------------------- #
     def _owner_share_now(self) -> float:
         owners = self.owner_ids()
@@ -225,8 +507,18 @@ def polis_fingerprint(w: Polis) -> str:
     reproducible independently of the conserved substrate."""
     h = hashlib.sha256()
     h.update(appropriation_fingerprint(w).encode())
-    trace = "|".join(f"{t}:{g}:{tgt}:{n}:{s:.6f}"
-                     for (t, g, tgt, n, s) in w._voice_log)
-    h.update(("|VOICE|" + trace).encode())
-    h.update(f"|win{w.living_window()}".encode())
+    if getattr(w.cfg, "groom", None) is None:
+        trace = "|".join(f"{t}:{g}:{tgt}:{n}:{s:.6f}"
+                         for (t, g, tgt, n, s) in w._voice_log)
+        h.update(("|VOICE|" + trace).encode())
+        h.update(f"|win{w.living_window()}".encode())
+    else:
+        # mod C: extended 8-tuple trace + the succession line (outcome, depth, groom log)
+        trace = "|".join(f"{t}:{g}:{tgt}:{n}:{s:.6f}:{c}:{ph}:{k}"
+                         for (t, g, tgt, n, s, c, ph, k) in w._voice_log)
+        h.update(("|VOICE|" + trace).encode())
+        h.update(f"|win{w.living_window()}|line{w.line_window()}".encode())
+        h.update(f"|out{w._outcome}|depth{w._depth}".encode())
+        gl = ";".join(f"{t}:{e}" for (t, e, _d) in w._groom_log)
+        h.update(("|GROOM|" + gl).encode())
     return h.hexdigest()[:16]
