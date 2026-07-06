@@ -439,7 +439,10 @@ class ClaudeTypedPolicy:
         news = [e for e in view.get("events", ()) if e not in self._NON_EVENTS]
         if self._last_t is None or news:
             return True
-        if view.get("apprentice") is None and view.get("candidates"):
+        # the no-apprentice nudge only for heads the LAW allows to pick — an
+        # untrained head ping-ponged EMIT<->void-PICK into 141 calls (s10, measured)
+        if (view.get("apprentice") is None and view.get("candidates")
+                and view["you"].get("can_teach", True)):
             if self._last[0] != "PICK":
                 return True
         return (view["t"] - self._last_t) >= self.period
