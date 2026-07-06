@@ -22,3 +22,4 @@ Thumbs.db
 Code/*.png
 Code/*.jsonl
 stage3/clive_*.json
+stage3/clive_archive/
