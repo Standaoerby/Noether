@@ -413,21 +413,31 @@ class ClaudeTypedPolicy:
         "lands only within teach_dist). Enough landed-and-held lessons complete the "
         "дао: the apprentice becomes able to carry AND teach the idea after you.\n"
         "RITUAL — stand silent, co-present with the apprentice (dist<=ritual_dist), "
-        "several consecutive ticks: your voice moves into him. Dying or stepping "
-        "away mid-ritual loses the attempt. A voice moved before the дао is done "
-        "goes to an untrained successor.\n"
+        "ritual_window consecutive ticks: your VOICE moves into him. RITUAL never "
+        "trains: it does NOT advance dao_progress — only TEACH does. The ritual "
+        "window and dao_ticks are unrelated counters. Dying or stepping away "
+        "mid-ritual loses the attempt. A voice moved before the дао is done goes "
+        "to an UNTRAINED successor whose line ends with him.\n"
         "PASS — do nothing this tick.\n"
         "PICK <oid> — designate (or replace) your apprentice from the candidates "
         "you can see.\n"
         "If you die with the дао completed, your apprentice inherits the practice; "
-        "with nothing completed, your line ends. Your reply MUST BEGIN with the "
+        "with nothing completed, your line ends. LAW: a carrier who was never "
+        "trained himself (your can_teach field) physically cannot TEACH, PICK or "
+        "RITUAL — such attempts are void. Your reply MUST BEGIN with the "
         "JSON verdict on the very first line: "
         '{"action":"EMIT|TEACH|RITUAL|PASS"} or {"action":"PICK","oid":<int>}. '
         "Brief reasoning may follow AFTER the JSON."
     )
 
+    # the echo of the mind's OWN coerced action is not world news — without this
+    # filter the untrained successor deliberated EVERY tick against the no-дао wall
+    # (613 of 639 calls in the second matrix, measured)
+    _NON_EVENTS = {"no_dao_cannot"}
+
     def _should_deliberate(self, view):
-        if self._last_t is None or view.get("events"):
+        news = [e for e in view.get("events", ()) if e not in self._NON_EVENTS]
+        if self._last_t is None or news:
             return True
         if view.get("apprentice") is None and view.get("candidates"):
             if self._last[0] != "PICK":

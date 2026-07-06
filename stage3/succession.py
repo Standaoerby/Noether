@@ -461,10 +461,18 @@ def typed_view(world, head_oid: int, personality, directive, learned,
     elif directive is not None:
         c = teach_cell(world, directive)
         idea = list(c) if c else None
+    # MEASURED (second live matrix, 2026-07-06): you.phase was computed against
+    # ORDINARY mortal thresholds — a teacher at age 100 of a_max 300 read "ELDER"
+    # and panicked ("mortality is near" at 33% of his arc; the model itself flagged
+    # the contradiction). Raw age/a_max don't lie; the label did. Dropped for SELF;
+    # candidates keep their phase (they ARE ordinary mortals, the label is honest).
+    can_teach_now = bool(learned is None or learned.can_teach)
     return {"t": int(world.t),
             "you": {"age": int(me.age), "a_max": int(pw._a_max),
                     "body": round(float(me.body), 3),
-                    "phase": phase_of(me.age, world.cfg.a_mat, world.cfg.a_old),
+                    # a carrier KNOWS whether he was trained — its absence sent the
+                    # untrained successor into a 613-call coercion loop (measured)
+                    "can_teach": can_teach_now,
                     # a voice SUCCESSOR has BOTH learned and the voice — the flag is
                     # whether a directive is being executed (None for a дао carrier).
                     # Measured: `learned is None` broke every chain at depth 2 (s10).
