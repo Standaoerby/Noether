@@ -86,6 +86,10 @@ class PolisConfig:
     a_old: int = A_OLD
     a_max: int = A_MAX
     days: int = DAYS
+    # mod E (Dunbar): social attention locus. None => OFF => byte-identical to canon.
+    # A cap on active social ties (registry of known other-oids), distinct from the
+    # spatial attention budget K. See stage3/dunbar.py.
+    dunbar_K: int | None = None
 
 
 class Polis(AppropriationWorld):
@@ -121,6 +125,10 @@ class Polis(AppropriationWorld):
         # C-LIVE (typed protocol) state — inert unless the policy is typed:
         self._typed_log = {}          # t -> action (JSON-safe list) — the mind's diary
         self._typed_events = []       # events since the mind's last look (view feed)
+        # mod E (Dunbar): social attention locus — pure belief overlay, no mass touched.
+        # Inert (None) => byte-identical to canon (gate ME-OFF).
+        from .dunbar import DunbarRegistry
+        self._dunbar = DunbarRegistry(cfg.dunbar_K)
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
         # appropriation run, else the sleeping Polis is not byte-identical to it.
@@ -181,6 +189,8 @@ class Polis(AppropriationWorld):
     # ---- the step seam ----------------------------------------------------- #
     def step(self):
         super().step()                         # full tower + appropriation, unchanged
+        # mod E: refresh the social registry from this tick's co-locations (no-op if OFF)
+        self._dunbar.register_contacts(self, self.t)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -188,6 +198,15 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
+
+    def state_fingerprint(self):
+        # canon state hash + the Dunbar registry (empty blob when OFF => canon-identical)
+        base = super().state_fingerprint()
+        blob = self._dunbar.fingerprint_blob()
+        if not blob:
+            return base
+        import hashlib
+        return hashlib.sha256(base.encode() + blob).hexdigest()[:16]
 
     def _step_voice_moda(self):
         # mortality check for an already-awake Demerzel
