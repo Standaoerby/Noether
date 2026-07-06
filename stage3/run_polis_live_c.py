@@ -207,6 +207,7 @@ def _live_matrix(kind, seeds, rhos, period=10, days=530):
                                     "polis_fp": polis_fingerprint(w)},
                            "actions": {str(t): a for t, a in w._typed_log.items()},
                            "livelog": pol.livelog}, f, ensure_ascii=False)
+            print()
             print(f"  rho={rho} s{seed}: {str(so['outcome']):<10} d{so['depth']} "
                   f"acts {dict(acts)} calls={pol.calls} replay={'≡' if rep else '✗'} "
                   f"-> {os.path.basename(path)}")
@@ -276,10 +277,13 @@ def _analyze(days=530):
 
 
 def main():
-    _gate_cl0()
-    _gate_cl1()
-    _gate_cl2()
-    _gate_cl3()
+    if "--skip-gates" in sys.argv:
+        print("(gates skipped: cell-by-cell live mode)")
+    else:
+        _gate_cl0()
+        _gate_cl1()
+        _gate_cl2()
+        _gate_cl3()
     if "--live" in sys.argv:
         kind = sys.argv[sys.argv.index("--live") + 1] \
             if len(sys.argv) > sys.argv.index("--live") + 1 else "haiku"
