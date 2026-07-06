@@ -232,3 +232,267 @@ def make_policy(kind="deterministic", **kw):
     if kind in ("claude", "llm", "live"):
         return ClaudePolicy(**kw)
     raise ValueError(f"unknown policy kind: {kind!r}")
+
+
+# --------------------------------------------------------------------------- #
+#  C-LIVE: typed policies — the mind chooses an ACTION, never emissions.       #
+#  Protocol: policy.typed is True; policy.act(world, head_oid, personality,    #
+#  directive, view) -> ("EMIT"|"TEACH"|"RITUAL"|"PASS") or ("PICK", oid).      #
+#  Mock/Claude see ONLY the view (privilege firewall); the FaithfulClone is a  #
+#  gate harness and may touch the world (documented god privilege).            #
+# --------------------------------------------------------------------------- #
+
+class MockTypedPolicy:
+    """A deterministic pseudo-mind exercising the WHOLE action space from the view
+    alone (gate CL2/CL3): picks the youngest visible MATURE, re-picks when the
+    apprentice ages into ELDER, teaches until the дао is done, gambles the ritual on
+    its own senescence, passes every 41st tick (the dominated action, deliberately
+    exercised). Pure function of the view -> replayable byte-for-byte."""
+    typed = True
+
+    def act(self, world, head_oid, personality, directive, view):
+        if view is None:
+            return ("EMIT",)
+        if view["t"] % 41 == 0:
+            return ("PASS",)
+        app = view.get("apprentice")
+        you = view["you"]
+        # hold the ritual once begun
+        if app is not None and app.get("in_ritual"):
+            return ("RITUAL",)
+        # senescence gamble: old, apprentice trained and co-present -> move the voice
+        if (app is not None and you["has_voice"] and app["dao_done"]
+                and you["age"] >= you["a_max"] - 35
+                and app["dist"] <= view["ritual_dist"]):
+            return ("RITUAL",)
+        # re-pick an aged-out apprentice; pick when none
+        needs_pick = app is None or app["phase"] != "MATURE"
+        if needs_pick:
+            cands = [c for c in view["candidates"] if c["phase"] == "MATURE"
+                     and (app is None or c["oid"] != app["oid"])]
+            if cands:
+                best = min(cands, key=lambda c: (c["age"], c["oid"]))
+                return ("PICK", best["oid"])
+            return ("EMIT",)
+        if not app["dao_done"]:
+            return ("TEACH",)
+        return ("EMIT",)
+
+
+class FaithfulClonePolicy:
+    """GATE HARNESS (CL1): re-implements the deterministic mod C machine per tick
+    through the typed protocol, to prove the seam is a pure re-parameterization —
+    the WORLD it produces must be byte-identical to the deterministic arm (state fp
+    + decision log + windows + outcome + depth). It deliberately uses the same god
+    privilege the machine had (god_pick sees vectors) — it is a test fixture, not a
+    fair mind.
+
+    Timing law it encodes (measured, not assumed): the deterministic machine flips
+    READY->RITUAL AFTER the tick's emission, so silence starts one tick later; the
+    typed protocol goes silent AT the action tick. Hence the clone arms `_pending`
+    at the transition tick and issues RITUAL from the NEXT tick — byte-identity
+    otherwise fails on the silent-window offset."""
+    typed = True
+
+    def __init__(self, gcfg):
+        from .succession import GroomConfig
+        self.g = gcfg or GroomConfig()
+        self._cand = None
+        self._vok = 0
+        self._vage = 0
+        self._accepted = False
+        self._excluded = set()
+        self._pending_ritual = False
+        self._head = None
+
+    def _reset(self):
+        self._cand = None
+        self._vok = self._vage = 0
+        self._accepted = False
+        self._pending_ritual = False
+
+    def act(self, world, head_oid, personality, directive, view):
+        from .succession import (god_pick_candidate, observable_dossier,
+                                 verify_candidate)
+        from sim_eventlog import DEATH
+        g = self.g
+        if view is None:
+            return ("EMIT",)
+        if self._head != head_oid:                 # succession: serve the new head
+            self._head = head_oid
+            self._reset()
+            self._excluded = set()
+        app = view.get("apprentice")
+        # events from the machine: apprentice death resets the hunt
+        for e in view.get("events", ()):
+            if e == "candidate_died":
+                if self._cand is not None:
+                    self._excluded.add(self._cand)
+                self._reset()
+            elif e in ("ritual_broken", "ritual_abandoned"):
+                self._pending_ritual = False
+        you = view["you"]
+        # despair from the WORLD, not the view: the view quantizes body to 3 decimals
+        # (honest mortal sensing, kept for real minds) — the machine compares raw
+        # floats, and 0.1999x vs the 0.2 bar flips the gamble (measured, s10 rho=.5
+        # t=353). The clone is a fixture and must match the machine bit-for-bit.
+        me = next((a for a in world.pop if a.oid == head_oid), None)
+        pw = world.pawn(head_oid)
+        desperate = (me is not None and
+                     (me.body < g.despair_body
+                      or me.age >= pw._a_max - g.despair_age))
+        # RITUAL continuation / pended start
+        if app is not None and app.get("in_ritual"):
+            return ("RITUAL",)
+        if self._pending_ritual and app is not None:
+            self._pending_ritual = False
+            return ("RITUAL",)
+        # accepted apprentice: mirror TEACH/READY/despair-gate of the machine
+        if self._accepted and app is not None:
+            co = app["dist"] <= view["ritual_dist"]
+            if app["dao_done"]:
+                if you["has_voice"] and co and (g.ritual_when == "first" or desperate):
+                    self._pending_ritual = True    # machine flips AFTER this tick
+                return ("EMIT",)
+            if (you["has_voice"] and g.allow_early_ritual and desperate and co):
+                self._pending_ritual = True
+                return ("TEACH",)
+            return ("TEACH",)
+        # SCOUT/VERIFY mirror (god privilege: vectors via god_pick_candidate)
+        if self._cand is None:
+            self._cand = god_pick_candidate(world, head_oid, self._excluded,
+                                            g.god_pick)
+            self._vok = self._vage = 0
+            return ("EMIT",)
+        alive = {a.oid for a in world.pop}
+        if self._cand not in alive:
+            self._excluded.add(self._cand)
+            self._reset()
+            return ("EMIT",)
+        self._vage += 1
+        d = observable_dossier(world, self._cand, head_oid)
+        if verify_candidate(d, g):
+            self._vok += 1
+        if self._vok >= g.verify_ticks:
+            self._accepted = True
+            oid, self._cand = self._cand, self._cand
+            return ("PICK", oid)
+        if self._vage > g.verify_giveup:
+            self._excluded.add(self._cand)
+            self._reset()
+        return ("EMIT",)
+
+
+class ClaudeTypedPolicy:
+    """The living teacher (C-LIVE): a Claude mind choosing typed actions from the
+    firewalled view. Same economy laws as mod B: deliberation_period (a strategist
+    holds a plan), event-triggered re-thinking (the world changed while he looked
+    away), sticky action between deliberations. Inert (EMIT) without a key/network.
+
+    The prompt states PHYSICS, never strategy: the lesson≡sermon economics and the
+    slot cost must be DISCOVERED, not told (pre-registration HL2)."""
+    typed = True
+
+    def __init__(self, model=DEFAULT_MODEL, deliberation_period=10, max_tokens=200):
+        self.model = model
+        self.period = int(deliberation_period)
+        self.max_tokens = int(max_tokens)
+        self.key = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.livelog = []            # [{"t":, "view":, "raw":, "action":}] for audit
+        self.calls = 0
+        self._last = ("EMIT",)
+        self._last_t = None
+        self._head = None
+
+    SYSTEM = (
+        "You are the teacher-agent inside a deterministic colony simulation. You are "
+        "mortal (age/a_max and body are yours to read). Your mission: make an idea "
+        "outlive you. Physics of your four verbs:\n"
+        "EMIT — preach the idea to those around you this tick.\n"
+        "TEACH — divert part of your attention to your chosen apprentice (lesson "
+        "lands only within teach_dist). Enough landed-and-held lessons complete the "
+        "дао: the apprentice becomes able to carry AND teach the idea after you.\n"
+        "RITUAL — stand silent, co-present with the apprentice (dist<=ritual_dist), "
+        "several consecutive ticks: your voice moves into him. Dying or stepping "
+        "away mid-ritual loses the attempt. A voice moved before the дао is done "
+        "goes to an untrained successor.\n"
+        "PASS — do nothing this tick.\n"
+        "PICK <oid> — designate (or replace) your apprentice from the candidates "
+        "you can see.\n"
+        "If you die with the дао completed, your apprentice inherits the practice; "
+        "with nothing completed, your line ends. Reply ONLY with JSON: "
+        '{"action":"EMIT|TEACH|RITUAL|PASS"} or {"action":"PICK","oid":<int>}.'
+    )
+
+    def _should_deliberate(self, view):
+        if self._last_t is None or view.get("events"):
+            return True
+        if view.get("apprentice") is None and view.get("candidates"):
+            if self._last[0] != "PICK":
+                return True
+        return (view["t"] - self._last_t) >= self.period
+
+    def _ask(self, view):
+        body = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": self.SYSTEM,
+            "messages": [{"role": "user", "content": json.dumps(view)}],
+        }
+        req = urllib.request.Request(
+            API_URL, data=json.dumps(body).encode(),
+            headers={"content-type": "application/json",
+                     "x-api-key": self.key,
+                     "anthropic-version": API_VERSION})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out = json.loads(r.read().decode())
+        txt = "".join(b.get("text", "") for b in out.get("content", [])
+                      if b.get("type") == "text")
+        return txt
+
+    @staticmethod
+    def _parse(txt):
+        try:
+            s = txt[txt.index("{"): txt.rindex("}") + 1]
+            d = json.loads(s)
+            a = str(d.get("action", "EMIT")).upper()
+            if a == "PICK":
+                return ("PICK", int(d["oid"]))
+            if a in ("EMIT", "TEACH", "RITUAL", "PASS"):
+                return (a,)
+        except Exception:
+            pass
+        return ("EMIT",)
+
+    def act(self, world, head_oid, personality, directive, view):
+        if view is None:
+            return ("EMIT",)
+        if self._head != head_oid:               # succession: a NEW mind wakes up
+            self._head = head_oid
+            self._last, self._last_t = ("EMIT",), None
+        if not self.key:
+            return ("EMIT",)                     # inert without a key (house pattern)
+        if not self._should_deliberate(view):
+            return self._last
+        try:
+            raw = self._ask(view)
+            act = self._parse(raw)
+            self.calls += 1
+        except Exception as e:
+            raw, act = f"ERROR {e}", ("EMIT",)
+        self.livelog.append({"t": view["t"], "head": head_oid,
+                             "view": view, "raw": raw, "action": list(act)})
+        self._last, self._last_t = act, view["t"]
+        return act
+
+
+def make_typed_policy(kind="mock", gcfg=None, **kw):
+    if kind == "mock":
+        return MockTypedPolicy()
+    if kind == "clone":
+        return FaithfulClonePolicy(gcfg)
+    if kind in ("haiku", "live"):
+        return ClaudeTypedPolicy(model=kw.pop("model", DEFAULT_MODEL), **kw)
+    if kind == "sonnet":
+        return ClaudeTypedPolicy(model=kw.pop("model", "claude-sonnet-4-6"), **kw)
+    raise ValueError(f"unknown typed policy kind {kind!r}")

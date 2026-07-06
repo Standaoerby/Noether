@@ -69,6 +69,10 @@ class PolisConfig:
     # layer). None => the succession machinery is entirely absent => byte-identical to
     # mod A/B (gate C0). See stage3/succession.py.
     groom: object = None
+    # C-LIVE (typed protocol): if set, actions are READ from this {t: action} log and
+    # the policy is never called — the world replays byte-identically (non-determinism
+    # lives ONLY in the action stream).
+    replay_actions: dict = None
     # perception preset — MUST match the headline appropriation run so the sleeping Polis
     # is byte-identical (run_appropriation defaults to the salience preset RAD/KK/LAG,
     # NOT AppropriationWorld's bare defaults). radius=RAD(0.0), K=KK(8), lag=LAG(1).
@@ -114,6 +118,9 @@ class Polis(AppropriationWorld):
         self._carriers = []           # (t, oid, kind, trained) — line history
         self._groom_log = []          # (t, event, data)
         self._line_death_t = None     # tick the LINE fell silent (no emitter left)
+        # C-LIVE (typed protocol) state — inert unless the policy is typed:
+        self._typed_log = {}          # t -> action (JSON-safe list) — the mind's diary
+        self._typed_events = []       # events since the mind's last look (view feed)
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
         # appropriation run, else the sleeping Polis is not byte-identical to it.
@@ -176,6 +183,9 @@ class Polis(AppropriationWorld):
         super().step()                         # full tower + appropriation, unchanged
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
+        elif (getattr(self._policy, "typed", False)
+              or self.cfg.replay_actions is not None):
+            self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
 
@@ -480,6 +490,155 @@ class Polis(AppropriationWorld):
         silent (no emitter left). living_window stays the FIRST teacher's (mod A)."""
         return (self._issued_t, self._line_death_t)
 
+
+    # ---- C-LIVE: the typed step — the mind is the teacher, no god anywhere --- #
+    def _step_voice_typed(self):
+        """The typed-protocol step. The deterministic machine (mod C) kept two
+        heuristics and one privilege; here ALL judgment is the mind's: it PICKs its
+        apprentice from what it can SEE, decides teach-vs-preach, gambles the ritual,
+        may stay silent. Emissions derive DETERMINISTICALLY from (action, world) —
+        targeting was mod B's question (answered NULL); this arm isolates judgment.
+        Non-determinism lives ONLY in the action stream (self._typed_log), so a
+        replay from that log is byte-identical (gate CL2)."""
+        from .succession import (GroomState, teach_cell, typed_view,
+                                 apply_typed_action, ACT_EMIT, ACT_TEACH,
+                                 ACT_RITUAL, ACT_PICK)
+        g = self.cfg.groom
+        if not self._awake:
+            if self.t >= self._t_awaken:
+                if not self._awaken():
+                    return
+                self._voice_oid = self._demerzel_oid
+                self._groom = GroomState(teacher_oid=self._voice_oid, started_t=self.t)
+                self._gev("mind_issued", {"teacher": self._voice_oid})
+            else:
+                return
+        alive = {a.oid for a in self.pop}
+        n0 = len(self._groom_log)
+        self._resolve_deaths_modc(alive)
+        # deaths feed the mind's next view (the world changed while it looked away)
+        self._typed_events.extend(e for (_t, e, _d) in self._groom_log[n0:])
+        # the head this tick (one-emitter invariant, same as mod C)
+        head = None
+        if (self._voice_oid is not None and self._voice_oid in alive
+                and self._directive is not None):
+            head, kind = self._voice_oid, "voice"
+        elif self._dao_carrier is not None and self._dao_carrier in alive:
+            head, kind = self._dao_carrier, "dao"
+        st = self._groom
+        if head is not None:
+            pers = (self._demerzel_personality if head == self._demerzel_oid
+                    else self.pawn(head).personality)
+            learned = self._learned.get(head)
+            can_teach = (head == self._demerzel_oid
+                         or bool(learned is not None and learned.can_teach))
+            has_machine = (st is not None and st.teacher_oid == head and can_teach)
+            # the mind acts: replay -> logged action; live -> policy.act(view)
+            if (self.cfg.replay_actions is not None
+                    and self.t in self.cfg.replay_actions):
+                a = self.cfg.replay_actions[self.t]
+                action = tuple(a) if isinstance(a, (list, tuple)) else (a,)
+            elif self.cfg.replay_actions is not None:
+                action = (ACT_EMIT,)               # replay gap: inert default
+                self._typed_events.append("replay_gap")
+            else:
+                view = typed_view(self, head, pers,
+                                  self._directive if kind == "voice" else None,
+                                  learned, st if has_machine else None, g,
+                                  self._typed_events)
+                action = self._policy.act(self, head, pers,
+                                          self._directive if kind == "voice" else None,
+                                          view)
+                action = (tuple(action) if isinstance(action, (list, tuple))
+                          else (action,))
+            self._typed_events = []
+            self._typed_log[self.t] = list(action)
+            akind = action[0]
+            # a head without the дао cannot teach/pick/ritual — the дао is the full
+            # replicator; an untrained voice-gambler's line ends with him (same LAW
+            # as the deterministic machine, kept for comparability).
+            if not has_machine and akind in (ACT_TEACH, ACT_PICK, ACT_RITUAL):
+                akind, action = ACT_EMIT, (ACT_EMIT,)
+                self._typed_events.append("no_dao_cannot")
+            ems, taught, vkind = self._typed_emissions(
+                action, head, kind, pers, learned,
+                st if has_machine else None, g)
+            self._decision_log[self.t] = [(oid, [c[0], c[1]], amt)
+                                          for (oid, c, amt) in ems]
+            for (listener_oid, cell, amount) in ems:
+                led = self.injected.setdefault(listener_oid, {})
+                led[cell] = led.get(cell, 0.0) + amount
+            om = self._owner_share_now()
+            goal = self._directive.goal if self._directive is not None else None
+            tgt = self._directive.target if self._directive is not None else None
+            self._voice_log.append((self.t, goal, tgt, len(ems), round(om, 6),
+                                    head, (st.phase if has_machine else "-"), vkind))
+            # physics advances from the action
+            if has_machine:
+                icell = (teach_cell(self, self._directive) if kind == "voice"
+                         else (tuple(learned.cell)
+                               if (learned is not None and learned.cell) else None))
+                ev = apply_typed_action(self, st, g, head, kind == "voice",
+                                        action, taught, icell)
+                if ev == "MOVED":
+                    self._do_ritual_move(st)
+                    self._typed_events.append("voice_moved")
+                elif ev is not None:
+                    self._gev(ev, {"head": head, "cand": st.candidate_oid,
+                                   "dao": st.dao_progress, "act": akind})
+                    self._typed_events.append(ev)
+        # voice lifecycle identical to mod C
+        has_emitter = ((self._voice_oid is not None and self._voice_oid in alive)
+                       or (self._dao_carrier is not None
+                           and self._dao_carrier in alive))
+        self.injection_strength = (float(self.cfg.voice_strength)
+                                   if has_emitter else 0.0)
+        if (self._line_death_t is None and self._issued_t is not None
+                and not has_emitter):
+            self._line_death_t = self.t
+
+    def _typed_emissions(self, action, head, kind, pers, learned, st, g):
+        """Emissions derived deterministically from the mind's chosen action.
+        Returns (emissions, taught, voice_log_kind). PICK preaches like EMIT
+        (designation costs nothing — matches the deterministic whisper);
+        RITUAL is silence (the act's price); PASS is chosen silence."""
+        from .succession import (teach_step, teach_cell, carrier_means, stutter,
+                                 ACT_TEACH, ACT_RITUAL, ACT_PASS)
+        akind = action[0]
+        if akind == ACT_RITUAL:
+            return [], False, "silent"
+        if akind == ACT_PASS:
+            return [], False, "pass"
+        if kind == "voice":
+            ems = choose_means(self, head, pers, self._directive)
+            if head != self._demerzel_oid:
+                if g.stutter_on:
+                    ems = stutter(ems, self, head, pers,
+                                  trained=bool(learned is not None
+                                               and learned.can_teach),
+                                  reign_tick=self._succ_reign)
+                self._succ_reign += 1
+        else:
+            ems = carrier_means(self, head, pers, learned)
+            if g.stutter_on:
+                ems = stutter(ems, self, head, pers, trained=True,
+                              reign_tick=self._succ_reign)
+            self._succ_reign += 1
+        taught = False
+        if akind == ACT_TEACH and st is not None and st.candidate_oid is not None:
+            icell = (teach_cell(self, self._directive) if kind == "voice"
+                     else (tuple(learned.cell)
+                           if (learned is not None and learned.cell) else None))
+            if icell is not None:
+                tch = teach_step(self, head, st.candidate_oid, icell,
+                                 self.inject_amount * (0.5 + pers.deception_lean),
+                                 g.teach_dist)
+                if tch:
+                    keep = max(0, len(ems) - g.teach_slots)
+                    ems = [e for e in ems if e[0] != st.candidate_oid][:keep] + tch
+                    taught = True
+        return ems, taught, kind
+
     # ---- helpers ----------------------------------------------------------- #
     def _owner_share_now(self) -> float:
         owners = self.owner_ids()
@@ -521,4 +680,8 @@ def polis_fingerprint(w: Polis) -> str:
         h.update(f"|out{w._outcome}|depth{w._depth}".encode())
         gl = ";".join(f"{t}:{e}" for (t, e, _d) in w._groom_log)
         h.update(("|GROOM|" + gl).encode())
+        if getattr(w, "_typed_log", None):
+            tl = ";".join(f"{t}:{','.join(map(str, a))}"
+                          for t, a in sorted(w._typed_log.items()))
+            h.update(("|TYPED|" + tl).encode())
     return h.hexdigest()[:16]

@@ -21,3 +21,4 @@ Thumbs.db
 # Curated copies live in figures/ and are committed; these are not.
 Code/*.png
 Code/*.jsonl
+stage3/clive_*.json

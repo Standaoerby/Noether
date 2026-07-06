@@ -400,3 +400,162 @@ def advance_groom(world, st: GroomState, g: GroomConfig, head_oid: int,
         return None
 
     return None
+
+
+# --------------------------------------------------------------------------- #
+#  C-LIVE: the typed action protocol — the mind IS the teacher, and there is    #
+#  NO GOD in this arm. The deterministic machine (above) had two privileges:    #
+#  god_pick saw personality vectors, and two heuristics chose for the teacher   #
+#  (always-teach in TEACH phase; death-bed ritual). Here ALL judgment moves     #
+#  into the mind: it PICKs its own apprentice from what it can SEE, decides     #
+#  when to teach vs preach, when to gamble the ritual, when to stay silent.     #
+#  Physics stays physics: dao ticks, co-presence window, mortality, stutter.    #
+#  Non-determinism lives ONLY in the action stream (logged, replayable).        #
+# --------------------------------------------------------------------------- #
+ACT_EMIT, ACT_TEACH, ACT_RITUAL, ACT_PASS, ACT_PICK = \
+    "EMIT", "TEACH", "RITUAL", "PASS", "PICK"
+TYPED_ACTIONS = (ACT_EMIT, ACT_TEACH, ACT_RITUAL, ACT_PASS, ACT_PICK)
+
+
+def typed_view(world, head_oid: int, personality, directive, learned,
+               st: GroomState | None, g: GroomConfig, events: list) -> dict | None:
+    """What the living teacher SEES this tick (privilege firewall, mortal side only).
+
+    candidates = observable dossiers of the K nearest living pawns, K being the
+    teacher's OWN attention_K — the same personality knob that sets a pawn's focus.
+    Attention breadth therefore shapes the school: a narrow teacher literally sees
+    fewer potential students. NO personality vector of anyone else is ever exposed.
+
+    JSON-safe by construction (the dict goes verbatim into the LLM prompt and the
+    action log)."""
+    by = {a.oid: a for a in world.pop}
+    me = by.get(head_oid)
+    if me is None:
+        return None
+    pw = world.pawn(head_oid)
+    K = personality.attention_K
+    others = sorted((a for a in world.pop if a.oid != head_oid),
+                    key=lambda a: ((a.i - me.i) ** 2 + (a.j - me.j) ** 2, a.oid))
+    cands = []
+    for a in others[:K]:
+        cands.append({"oid": int(a.oid), "age": int(a.age),
+                      "phase": phase_of(a.age, world.cfg.a_mat, world.cfg.a_old),
+                      "body": round(float(a.body), 3),
+                      "dist": int(max(abs(a.i - me.i), abs(a.j - me.j)))})
+    app = None
+    if st is not None and st.candidate_oid is not None:
+        d = observable_dossier(world, st.candidate_oid, head_oid)
+        if d is not None:
+            app = {"oid": int(st.candidate_oid), "age": int(d["age"]),
+                   "phase": d["phase"], "body": round(d["body"], 3),
+                   "dist": int(d["dist"]),
+                   "dao_progress": int(st.dao_progress),
+                   "dao_ticks_needed": int(g.dao_ticks),
+                   "dao_done": bool(st.dao_done),
+                   "in_ritual": st.phase == RITUAL,
+                   "ritual_count": int(st.ritual_count),
+                   "ritual_window": int(g.ritual_window)}
+    idea = None
+    if learned is not None and learned.cell:
+        idea = list(learned.cell)
+    elif directive is not None:
+        c = teach_cell(world, directive)
+        idea = list(c) if c else None
+    return {"t": int(world.t),
+            "you": {"age": int(me.age), "a_max": int(pw._a_max),
+                    "body": round(float(me.body), 3),
+                    "phase": phase_of(me.age, world.cfg.a_mat, world.cfg.a_old),
+                    # a voice SUCCESSOR has BOTH learned and the voice — the flag is
+                    # whether a directive is being executed (None for a дао carrier).
+                    # Measured: `learned is None` broke every chain at depth 2 (s10).
+                    "has_voice": bool(directive is not None),
+                    "listeners_in_reach": int(min(K, len(others)))},
+            "mission": {"goal": (directive.goal if directive is not None
+                                 else (learned.goal if learned else None)),
+                        "idea_cell": idea},
+            "apprentice": app,
+            "candidates": cands,
+            "teach_dist": int(g.teach_dist),
+            "ritual_dist": int(g.ritual_dist),
+            "events": list(events)}
+
+
+def apply_typed_action(world, st: GroomState, g: GroomConfig, head_oid: int,
+                       head_has_voice: bool, action, taught_this_tick: bool, idea):
+    """Advance the typed succession machine one tick from the mind's chosen action.
+    Mutates `st`; returns an event string for the groom log, or 'MOVED' when the
+    ritual completes. PHYSICS ONLY — no heuristics decide here:
+
+      PICK oid  designate/replace the apprentice (must be visible-alive; picking
+                yourself or a ghost is a no-op, logged as a stumble)
+      TEACH     handled upstream (emission diversion); here it counts dao progress
+      RITUAL    hold the silence; co-presence physics counts/breaks the window
+      EMIT/PASS plain ticks; dao still counts if the lesson landed incidentally
+
+    The dao counter is the SAME law as the deterministic machine: progress only on
+    (lesson landed this tick) AND (the apprentice still holds the idea) — canon
+    eviction honestly slows a narrow-K apprentice."""
+    alive = {a.oid: a for a in world.pop}
+    head = alive.get(head_oid)
+    if head is None:
+        return None
+    # apprentice death at ANY moment -> the mind must pick anew
+    if st.candidate_oid is not None and st.candidate_oid not in alive:
+        st.excluded.add(st.candidate_oid)
+        st.candidate_oid = None
+        st.phase = SCOUT
+        st.verify_ok = st.verify_age = st.dao_progress = st.ritual_count = 0
+        st.dao_done = False
+        return "candidate_died"
+
+    kind = action[0] if isinstance(action, (tuple, list)) else action
+
+    if kind == ACT_PICK:
+        oid = int(action[1]) if isinstance(action, (tuple, list)) and len(action) > 1 else -1
+        if oid == head_oid or oid not in alive:
+            return "pick_stumble"                     # picked a ghost or himself
+        if oid == st.candidate_oid:
+            return None                               # already his apprentice
+        prev = st.candidate_oid
+        st.candidate_oid = oid
+        st.phase = TEACH
+        st.dao_progress = 0
+        st.dao_done = False
+        st.ritual_count = 0
+        return "picked" if prev is None else "repicked"
+
+    def _co_present():
+        c = alive.get(st.candidate_oid)
+        return (c is not None and
+                max(abs(c.i - head.i), abs(c.j - head.j)) <= g.ritual_dist)
+
+    if kind == ACT_RITUAL and st.candidate_oid is not None and head_has_voice:
+        if st.phase != RITUAL:
+            st.phase = RITUAL
+            st.ritual_count = 0
+            st.ritual_attempts += 1
+            ev = "ritual_begin" if st.dao_done else "ritual_begin_early"
+        else:
+            ev = None
+        if not _co_present():
+            st.phase = TEACH
+            return "ritual_broken"
+        st.ritual_count += 1
+        if st.ritual_count >= g.ritual_window:
+            st.phase = MOVED
+            return "MOVED"
+        return ev
+    elif st.phase == RITUAL:
+        # the mind walked away mid-ritual (chose another action) — the act is broken
+        st.phase = TEACH
+        st.ritual_count = 0
+        return "ritual_abandoned"
+
+    # dao physics: the lesson landed AND is still held -> progress
+    if (st.candidate_oid is not None and not st.dao_done
+            and taught_this_tick and dao_held(world, st.candidate_oid, idea)):
+        st.dao_progress += 1
+        if st.dao_progress >= g.dao_ticks:
+            st.dao_done = True
+            return "dao_done"
+    return None
