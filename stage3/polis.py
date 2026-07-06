@@ -90,6 +90,17 @@ class PolisConfig:
     # A cap on active social ties (registry of known other-oids), distinct from the
     # spatial attention budget K. See stage3/dunbar.py.
     dunbar_K: int | None = None
+    # mod F (material culture, vitok 1 = vessel): a DUAL-LAYER artifact reservoir — the
+    # FIRST extension of the mass invariant (soil+plant+Σbody+Σartifact.mass). False =>
+    # OFF => empty field => sum_mass()=0.0 => _matter byte-identical to canon (gate
+    # MF-OFF). See stage3/artifact.py. Thresholds are deterministic (WE TEST them).
+    artifacts: bool = False
+    write_stasis: int = 8            # ticks a fat pawn must dwell before it writes
+    write_stake: float = 0.30        # kg of body frozen into a new vessel
+    mat_decay: float = 0.001         # material-decay rate (mass → soil; slow for vessel)
+    sem_decay: float = 0.02          # semantic-decay rate (salience → 0)
+    read_threshold: float = 0.5      # salience below this => unreadable ruin
+    salience0: float = 1.0           # starting / copy-refreshed cultural loudness
 
 
 class Polis(AppropriationWorld):
@@ -129,6 +140,17 @@ class Polis(AppropriationWorld):
         # Inert (None) => byte-identical to canon (gate ME-OFF).
         from .dunbar import DunbarRegistry
         self._dunbar = DunbarRegistry(cfg.dunbar_K)
+        # mod F (material culture): the artifact reservoir. MUST exist BEFORE super().__init__,
+        # because _matter() (overridden below) is called inside CommWorld.__init__ to set M0
+        # — the field is empty then, sum_mass()=0.0, so M0 is measured as pure canon. OFF
+        # (cfg.artifacts=False) => empty field forever => _matter ≡ canon (gate MF-OFF).
+        from .artifact import ArtifactField
+        self._artifacts = ArtifactField(
+            enabled=cfg.artifacts, write_stasis=cfg.write_stasis,
+            write_stake=cfg.write_stake, mat_decay=cfg.mat_decay,
+            sem_decay=cfg.sem_decay, read_threshold=cfg.read_threshold,
+            salience0=cfg.salience0,
+        )
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
         # appropriation run, else the sleeping Polis is not byte-identical to it.
@@ -191,6 +213,10 @@ class Polis(AppropriationWorld):
         super().step()                         # full tower + appropriation, unchanged
         # mod E: refresh the social registry from this tick's co-locations (no-op if OFF)
         self._dunbar.register_contacts(self, self.t)
+        # mod F: writing / reading / copying / dual decay (no-op if OFF). Runs AFTER the
+        # tower's plant-growth+grazing for this tick, so material decay returns mass to
+        # soil that only next tick's growth can draw on — the slow civilisational arc.
+        self._artifacts.tick(self)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -199,10 +225,20 @@ class Polis(AppropriationWorld):
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
 
+    def _matter(self):
+        # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
+        # a fourth reservoir beside soil/plant/body. Canon Code/ is untouched; the +Σmass
+        # enters ONLY here (a legal seam — Polis already overrides step/fingerprint). With
+        # artifacts OFF the field is empty, sum_mass() returns float 0.0, and _matter is
+        # byte-identical to canon (gate MF-OFF trivially).
+        return super()._matter() + self._artifacts.sum_mass()
+
     def state_fingerprint(self):
-        # canon state hash + the Dunbar registry (empty blob when OFF => canon-identical)
+        # canon state hash + Dunbar registry + artifact field (each empty when its module
+        # is OFF => canon-identical). Blobs are concatenated in a fixed order (Dunbar, then
+        # artifacts); when BOTH are empty the base hash is returned unchanged (MF-OFF/ME-OFF).
         base = super().state_fingerprint()
-        blob = self._dunbar.fingerprint_blob()
+        blob = self._dunbar.fingerprint_blob() + self._artifacts.fingerprint_blob()
         if not blob:
             return base
         import hashlib
