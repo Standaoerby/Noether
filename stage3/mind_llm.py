@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 import urllib.error
 
@@ -454,16 +455,22 @@ class ClaudeTypedPolicy:
             "system": self.SYSTEM,
             "messages": [{"role": "user", "content": json.dumps(view)}],
         }
-        req = urllib.request.Request(
-            API_URL, data=json.dumps(body).encode(),
-            headers={"content-type": "application/json",
-                     "x-api-key": self.key,
-                     "anthropic-version": API_VERSION})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            out = json.loads(r.read().decode())
-        txt = "".join(b.get("text", "") for b in out.get("content", [])
-                      if b.get("type") == "text")
-        return txt
+        last = None
+        for attempt in (1, 2):                    # one retry: transient API hiccups
+            try:
+                req = urllib.request.Request(
+                    API_URL, data=json.dumps(body).encode(),
+                    headers={"content-type": "application/json",
+                             "x-api-key": self.key,
+                             "anthropic-version": API_VERSION})
+                with urllib.request.urlopen(req, timeout=45) as r:
+                    out = json.loads(r.read().decode())
+                return "".join(b.get("text", "") for b in out.get("content", [])
+                               if b.get("type") == "text")
+            except Exception as e:
+                last = e
+                time.sleep(2 * attempt)
+        raise last
 
     @staticmethod
     def _parse(txt):
@@ -505,8 +512,10 @@ class ClaudeTypedPolicy:
             raw = self._ask(view)
             act, parsed = self._parse(raw)
             self.calls += 1
+            print(".", end="", flush=True)       # heartbeat: slow != stuck
         except Exception as e:
             raw, act, parsed = f"ERROR {e}", ("EMIT",), False
+            print("!", end="", flush=True)
         self.livelog.append({"t": view["t"], "head": head_oid, "parsed": parsed,
                              "view": view, "raw": raw, "action": list(act)})
         self._last, self._last_t = act, view["t"]
