@@ -393,7 +393,7 @@ class ClaudeTypedPolicy:
     slot cost must be DISCOVERED, not told (pre-registration HL2)."""
     typed = True
 
-    def __init__(self, model=DEFAULT_MODEL, deliberation_period=10, max_tokens=200):
+    def __init__(self, model=DEFAULT_MODEL, deliberation_period=10, max_tokens=400):
         self.model = model
         self.period = int(deliberation_period)
         self.max_tokens = int(max_tokens)
@@ -420,8 +420,10 @@ class ClaudeTypedPolicy:
         "PICK <oid> — designate (or replace) your apprentice from the candidates "
         "you can see.\n"
         "If you die with the дао completed, your apprentice inherits the practice; "
-        "with nothing completed, your line ends. Reply ONLY with JSON: "
-        '{"action":"EMIT|TEACH|RITUAL|PASS"} or {"action":"PICK","oid":<int>}.'
+        "with nothing completed, your line ends. Your reply MUST BEGIN with the "
+        "JSON verdict on the very first line: "
+        '{"action":"EMIT|TEACH|RITUAL|PASS"} or {"action":"PICK","oid":<int>}. '
+        "Brief reasoning may follow AFTER the JSON."
     )
 
     def _should_deliberate(self, view):
@@ -452,17 +454,29 @@ class ClaudeTypedPolicy:
 
     @staticmethod
     def _parse(txt):
-        try:
-            s = txt[txt.index("{"): txt.rindex("}") + 1]
-            d = json.loads(s)
-            a = str(d.get("action", "EMIT")).upper()
-            if a == "PICK":
-                return ("PICK", int(d["oid"]))
-            if a in ("EMIT", "TEACH", "RITUAL", "PASS"):
-                return (a,)
-        except Exception:
-            pass
-        return ("EMIT",)
+        """Find the FIRST valid JSON object carrying an 'action' anywhere in the
+        reply. MEASURED (first live matrix, 2026-07-06): with the naive
+        first-{...last-} slice, 667/694 Haiku replies were truncated at
+        max_tokens=200 BEFORE any JSON appeared and silently fell back to EMIT —
+        the matrix measured a muzzle, not a mind (intent scan of the cut replies:
+        TEACH 427, RITUAL 141, PICK 44). Hence the JSON-FIRST protocol in SYSTEM,
+        this raw_decode scan, and the parsed flag in the livelog so a mute reply
+        can never again masquerade as a judgment. Returns (action, parsed)."""
+        dec = json.JSONDecoder()
+        i = txt.find("{")
+        while i != -1:
+            try:
+                d, _ = dec.raw_decode(txt[i:])
+                if isinstance(d, dict) and "action" in d:
+                    a = str(d.get("action", "")).upper()
+                    if a == "PICK" and "oid" in d:
+                        return ("PICK", int(d["oid"])), True
+                    if a in ("EMIT", "TEACH", "RITUAL", "PASS"):
+                        return (a,), True
+            except Exception:
+                pass
+            i = txt.find("{", i + 1)
+        return ("EMIT",), False
 
     def act(self, world, head_oid, personality, directive, view):
         if view is None:
@@ -476,11 +490,11 @@ class ClaudeTypedPolicy:
             return self._last
         try:
             raw = self._ask(view)
-            act = self._parse(raw)
+            act, parsed = self._parse(raw)
             self.calls += 1
         except Exception as e:
-            raw, act = f"ERROR {e}", ("EMIT",)
-        self.livelog.append({"t": view["t"], "head": head_oid,
+            raw, act, parsed = f"ERROR {e}", ("EMIT",), False
+        self.livelog.append({"t": view["t"], "head": head_oid, "parsed": parsed,
                              "view": view, "raw": raw, "action": list(act)})
         self._last, self._last_t = act, view["t"]
         return act
