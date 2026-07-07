@@ -144,6 +144,10 @@ def _gate_mfv2_replay():
 def _gate_regression():
     print(f"\n--- vitok-1 regression (MF-*) ---")
     _gate_mf_off(); _gate_mf_mass(); _gate_mf_semantic(); _gate_mf_replay()
+    # mod-E regression (audit addition): the Dunbar anchor must also stand.
+    print(f"--- mod-E regression (ME-*) ---")
+    from stage3.run_dunbar_e import _gate_me_off, _gate_me_mass, _gate_me_replay
+    _gate_me_off(); _gate_me_mass(); _gate_me_replay()
 
 
 # --------------------------------------------------------------------------- #
@@ -192,8 +196,27 @@ def _hg1(seeds=(7, 8, 9), days=300):
 
 
 def _hg2(seed=7, seeds=(7, 8, 9), days=300):
-    print(f"\n{HDR}\nHG2 — is capital a divergence RATCHET? Gini(body) trajectory, OFF vs ON\n"
-          f"(rate grid on seed {seed}; the headline rate 0.02 across seeds)\n{HDR}")
+    """AUDIT REWRITE (the 'корона на кладбище' rake, caught by self-audit): the living-
+    snapshot Gini CONFOUNDS wealth divergence with demography — at rate 0.02 capital is
+    a demographic SINK (pop 53 vs 156 OFF), so the living are a selected top and their
+    Gini can rise by pure ATTRITION. PRIMARY is therefore the Gini of the lifetime body
+    INTEGRAL over EVERYONE who lived (the HF3 base); the snapshot trajectory is kept as
+    a SECONDARY measure of the composition of the living, labelled as such."""
+    print(f"\n{HDR}\nHG2 — is capital a divergence RATCHET?\n"
+          f"PRIMARY: Gini of lifetime body-integral, ALL who lived (honest base).\n"
+          f"SECONDARY: living-snapshot trajectory = composition of survivors, NOT\n"
+          f"divergence (attrition inflates it when capital is a demographic sink).\n{HDR}")
+    print(f"  PRIMARY (rate 0.02):")
+    print(f"  {'seed':>5}{'G_int OFF':>11}{'G_int ON':>10}{'Δ':>8}{'pop OFF':>9}{'pop ON':>8}")
+    for s in seeds:
+        w_off, i_off = _run_with_body_integral(_cfg2(seed=s, days=days, capital=False), days)
+        w_on, i_on = _run_with_body_integral(
+            _cfg2(seed=s, days=days, capital=True, capital_rate=0.02), days)
+        assert w_off.matter_drift() < 1e-9 and w_on.matter_drift() < 1e-9
+        print(f"  {s:>5}{_gini(i_off.values()):>11.3f}{_gini(i_on.values()):>10.3f}"
+              f"{_gini(i_on.values()) - _gini(i_off.values()):>+8.3f}"
+              f"{len(w_off.pop):>9}{len(w_on.pop):>8}")
+
     ticks = (50, 100, 150, 200, 250, 300)
 
     def _traj(cfg):
@@ -205,6 +228,7 @@ def _hg2(seed=7, seeds=(7, 8, 9), days=300):
                 out.append(_gini(a.body for a in w.pop))
         return w, out
 
+    print(f"\n  SECONDARY — composition of the LIVING (snapshot; attrition-inflated):")
     print(f"  {'run':>16}" + "".join(f"{f'G@{t}':>9}" for t in ticks)
           + f"{'slope':>9}{'pop':>6}")
     for label, kw in (("OFF", dict(capital=False)),
@@ -215,12 +239,11 @@ def _hg2(seed=7, seeds=(7, 8, 9), days=300):
         assert w.matter_drift() < 1e-9, f"HG2 cell leaked matter ({label})"
         print(f"  {label:>16}" + "".join(f"{g:>9.3f}" for g in tr)
               + f"{tr[-1] - tr[0]:>+9.3f}{len(w.pop):>6}")
-    print(f"\n  headline (rate 0.02) across seeds:")
-    print(f"  {'seed':>5}{'G@300 OFF':>11}{'G@300 ON':>10}{'Δ':>8}")
-    for s in seeds:
-        _, t_off = _traj(_cfg2(seed=s, days=days, capital=False))
-        _, t_on = _traj(_cfg2(seed=s, days=days, capital=True, capital_rate=0.02))
-        print(f"  {s:>5}{t_off[-1]:>11.3f}{t_on[-1]:>10.3f}{t_on[-1] - t_off[-1]:>+8.3f}")
+    print("\n  read (audited): on the HONEST base the divergence ratchet is a NULL — the")
+    print("  Δ of the lifetime-integral Gini flips sign across seeds. The stable +0.11..")
+    print("  +0.18 of the snapshot was survivor SELECTION: capital stratifies by shaping")
+    print("  WHO REMAINS ALIVE (a sink starves the poor out of the pool), not by")
+    print("  compounding the lifetime-labour trajectories of those who live.")
 
 
 def _overlap(a: set, b: set):
@@ -232,30 +255,55 @@ def _overlap(a: set, b: set):
     return inter / len(a), inter / len(a | b)
 
 
+def _run_with_history(cfg, days):
+    """Run accumulating BOTH the lifetime body integral AND the HISTORICAL owner class
+    (every oid that held territory at ANY tick). AUDIT FIX: the end-snapshot owner_ids()
+    mechanically drops every owner who died before the end — measured, only 33-50% of
+    capital-makers are alive at t=300, so maker→T overlaps against the snapshot are
+    understated up to ~2x. Time bases of the compared sets must match. Runner-only reads;
+    fingerprints untouched."""
+    w = Polis(EventLog(), cfg)
+    integral = defaultdict(float)
+    t_hist = set()
+    for _ in range(days):
+        w.step()
+        for a in w.pop:
+            integral[a.oid] += a.body
+        t_hist |= set(w.owner_ids())
+    return w, integral, t_hist
+
+
 def _hg3(seeds=(7, 8, 9), days=300):
-    """THE MAIN TROPHY. Elite sets on ONE population base (everyone who lived):
-        T  territorial owners  owner_ids() at run end (the REAL class — never _owner_ids)
+    """THE MAIN TROPHY, audited. Elite sets on ONE population base (everyone who lived),
+    and on ONE time base (full-history sets on both sides):
+        T  territorial owners  HISTORICAL owner_ids() union over ticks (audit fix; the
+                               end-snapshot dropped dead owners and understated overlaps)
         V  vessel-makers       oids with surviving vessel mass
         Cm capital-makers      oids that minted a tool
         Ch top-harvesters      top-|Cm| oids by Σextra received (size-matched to Cm)
         Sm store-makers        oids that minted a store
         Sd top-drawers         top-|Sm| oids by Σmass drawn (size-matched to Sm)
-    Tautology guard: the mints are body-gated, so 'makers are rich' is the rule read
-    back. The non-tautological cells are the FLOW elites (Ch, Sd — open access lets the
-    poor drink) vs T, and the maker-axes vs EACH OTHER."""
-    print(f"\n{HDR}\nHG3 — detached wealth: a NEW stratum, or a MIRROR of land?\n"
-          f"(cond = |A∩B|/|A| read 'share of A inside B' · J = Jaccard · store+capital ON,\n"
-          f"open access, rate 0.02)\n{HDR}")
+    Base rates are printed so every overlap reads against chance, not in a vacuum.
+    Tautology flags: the mints are body-gated ('makers are rich' is the rule read back);
+    Sd→T is a SUBSTRATE cell — measured, P(owner|any drawer) ≈ 0.01, hunger and
+    ownership simply never coincide, so its zero carries no news beyond that."""
+    print(f"\n{HDR}\nHG3 — detached wealth: a NEW stratum, or a MIRROR of land? (audited)\n"
+          f"(cond = |A∩B|/|A| · J = Jaccard · T = HISTORICAL owner class · base rates\n"
+          f"printed · store+capital ON, open access, rate 0.02)\n{HDR}")
     pairs = (("Cm", "T"), ("Ch", "T"), ("Sm", "T"), ("Sd", "T"),
              ("Cm", "V"), ("Cm", "Sm"), ("Ch", "Sd"))
-    print(f"  {'seed':>5}{'|T|':>5}{'|V|':>5}{'|Cm|':>5}{'|Ch|':>5}{'|Sm|':>5}{'|Sd|':>5}"
+    print(f"  {'seed':>5}{'|T|':>5}{'P(T)':>6}{'|Cm|':>5}{'|Ch|':>5}{'|Sm|':>5}{'|Sd|':>5}"
           + "".join(f"{a + '→' + b:>10}" for (a, b) in pairs))
     acc = {p: [] for p in pairs}
+    base_rates = []
     for s in seeds:
-        w, integral = _run_with_body_integral(
+        w, integral, T = _run_with_history(
             _cfg2(store=True, capital=True, capital_rate=0.02, seed=s, days=days), days)
+        assert w.matter_drift() < 1e-9, "HG3 cell leaked matter"
         af = w._artifacts
-        T = set(w.owner_ids())
+        lived = set(integral)
+        base = len(T & lived) / len(lived) if lived else float("nan")
+        base_rates.append(base)
         V = {a.maker_oid for a in af.artifacts if a.kind == "vessel"}
         Cm = {c[2] for c in af.capitals}
         Sm = {st[2] for st in af.stores}
@@ -267,23 +315,24 @@ def _hg3(seeds=(7, 8, 9), days=300):
         Ch = set(sorted(by_h, key=lambda o: (-by_h[o], o))[:max(len(Cm), 1)])
         Sd = set(sorted(by_d, key=lambda o: (-by_d[o], o))[:max(len(Sm), 1)])
         S = dict(T=T, V=V, Cm=Cm, Ch=Ch, Sm=Sm, Sd=Sd)
-        row = f"  {s:>5}{len(T):>5}{len(V):>5}{len(Cm):>5}{len(Ch):>5}{len(Sm):>5}{len(Sd):>5}"
+        row = f"  {s:>5}{len(T):>5}{base:>6.2f}{len(Cm):>5}{len(Ch):>5}{len(Sm):>5}{len(Sd):>5}"
         for p in pairs:
             cond, j = _overlap(S[p[0]], S[p[1]])
             acc[p].append((cond, j))
             row += f"{cond:>6.2f}/{j:>3.2f}"
         print(row)
-    print(f"\n  means:")
+    print(f"\n  means (base rate P(historical owner | lived) = "
+          f"{sum(base_rates) / len(base_rates):.2f} — read every X→T against it):")
     for p in pairs:
         cs = [c for (c, _j) in acc[p] if c == c]
         js = [j for (_c, j) in acc[p] if j == j]
         cm = sum(cs) / len(cs) if cs else float("nan")
         jm = sum(js) / len(js) if js else float("nan")
         print(f"    {p[0]}→{p[1]:<3} cond {cm:.2f}  J {jm:.2f}")
-    print("\n  read: maker-axes (Cm,Sm) inside T = wealth-gate mirroring land (expected,")
-    print("  the tautology cell). The trophy cells are the FLOW elites: Ch→T and Sd→T low")
-    print("  => detached wealth flows to a set ORTHOGONAL to territory (a new stratum);")
-    print("  high => the tool and the heap feed the landlords again (an honest mirror).")
+    print("\n  read (audited): maker-axes vs the FULL-HISTORY owner class answer whether")
+    print("  minting sits on the landed stratum; Ch→T against the printed base rate is")
+    print("  the clean flow cell (harvest is NOT body-gated — geography routes it);")
+    print("  Sd→T is substrate (hunger∩ownership≈∅ by measurement), not a trophy.")
 
 
 # --------------------------------------------------------------------------- #

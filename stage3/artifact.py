@@ -403,7 +403,12 @@ class ArtifactField:
     def _store_draw(self, world, pop_sorted, t):
         """A HUNGRY pawn (body < store_draw_at) on a cell with an accessible store
         extracts min(store.mass, store_draw_rate) back into its body — the inverse of
-        writing, a pure mass transfer (the invariant holds trivially). Draws walk pawns
+        writing, a pure mass transfer (the invariant holds trivially). LOSSLESS BY
+        DESIGN: canonical eating pays EFF=0.55 (metabolic cost of CONVERTING plant to
+        body), but reservoir-to-reservoir TRANSFERS never pay it — writing (body→mass)
+        was lossless in vitok 1, so un-printing (mass→body) is its exact lossless
+        inverse: the stored mass was already metabolised once. Transfer ≠ conversion.
+        Draws walk pawns
         in oid order and stores in aid order (oldest heap first); one draw per pawn per
         tick. A store drained to zero is swept by material decay the same tick (its
         remaining 0.0 goes to soil and the object is removed as a ruin)."""
@@ -442,7 +447,10 @@ class ArtifactField:
         extra = min(soil[i,j], capital_rate · Σtool_mass) from the SOIL into its body.
         THE INVARIANT SUBTLETY (the sharpest gate of vitok 2): capital NEVER creates
         mass — it opens a reservoir (soil) that the canonical eat (which grazes PLANT)
-        cannot reach: irrigation/deep tillage. Productivity is proportional to the
+        cannot reach: irrigation/deep tillage. Lossless like every reservoir transfer
+        (the EFF=0.55 toll is the metabolic price of the plant→body CONVERSION, not a
+        tax on moving mass between reservoirs — same law as writing and drawing).
+        Productivity is proportional to the
         tool's remaining mass (a worn mill grinds worse — material decay IS
         amortisation). Pawns are walked in oid order; each takes from what soil
         remains — deterministic contention."""
