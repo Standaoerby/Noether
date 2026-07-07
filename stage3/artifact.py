@@ -63,9 +63,18 @@ from sim_eventlog import REPRO, DEATH
 # but load-bearing for any future oid/aid join.
 ARTIFACT_AID_BASE = 10_000_000
 
-# material-decay rate by kind: vessel is SLOW (a durable carrier). Store/capital arrive
-# in vitok 2 with their own rates. A property of the object, not a global knob.
-KIND_MAT_DECAY = {"vessel": 1.0}   # multiplier on cfg.mat_decay; vessel = full slow rate
+# material-decay rate by kind: vessel is SLOW (a durable carrier); a store rots faster
+# (grain spoils); capital wears fastest (a tool erodes with use). A property of the
+# object, not a global knob — deterministic thresholds WE TEST.
+KIND_MAT_DECAY = {"vessel": 1.0, "store": 3.0, "capital": 5.0}
+
+# vitok-2 mint floors (measured calibration, seed 7 rho0.5 claim box6: tick-p99 body
+# ≈ 4.7, tick-max ≈ 6.5, while p90 sits BELOW REPRO — mass lives in a narrow top).
+# The floors stratify the mints by wealth: the merely-fat write (REPRO), the rich
+# store a surplus (1.5·REPRO), the richest freeze a tool (2·REPRO). Blind rules, no
+# intent — does blind surplus make a stratum?
+STORE_BODY_FLOOR = 1.5 * REPRO     # body after store_stake must stay above this
+CAPITAL_BODY_FLOOR = 2.0 * REPRO   # body after capital_stake must stay above this
 
 # a written body-stake must not kill its author: writing may not pull body below this
 # floor (a small margin above the canon DEATH threshold). Otherwise writing is suicide
@@ -98,7 +107,12 @@ class ArtifactField:
 
     def __init__(self, enabled: bool, write_stasis: int = 8, write_stake: float = 0.30,
                  mat_decay: float = 0.001, sem_decay: float = 0.02,
-                 read_threshold: float = 0.5, salience0: float = 1.0):
+                 read_threshold: float = 0.5, salience0: float = 1.0,
+                 store_on: bool = False, store_stake: float = 0.30,
+                 store_draw_at: float = 0.40, store_draw_rate: float = 0.10,
+                 store_access: str = "open",
+                 capital_on: bool = False, capital_stake: float = 0.50,
+                 capital_rate: float = 0.02, capital_access: str = "open"):
         self.on = bool(enabled)
         # thresholds (deterministic — WE TEST them; first question is whether BLIND
         # accumulation makes a civilisation with no intent, same logic as expansion-as-
@@ -109,6 +123,17 @@ class ArtifactField:
         self.sem_decay = float(sem_decay)          # semantic-decay rate (salience → 0)
         self.read_threshold = float(read_threshold)  # salience below this => unreadable ruin
         self.salience0 = float(salience0)          # starting/refreshed cultural loudness
+        # vitok 2 — store (a printable mass reserve) and capital (a productivity tool).
+        # Both OFF by default => the vitok-1 vessel run is byte-identical (gate MFv2-OFF).
+        self.store_on = bool(store_on)
+        self.store_stake = float(store_stake)      # kg of body frozen into a store
+        self.store_draw_at = float(store_draw_at)  # hunger line: body below this may draw
+        self.store_draw_rate = float(store_draw_rate)  # kg per tick a drawer may extract
+        self.store_access = str(store_access)      # open | owner | maker
+        self.capital_on = bool(capital_on)
+        self.capital_stake = float(capital_stake)  # kg of body frozen into a tool
+        self.capital_rate = float(capital_rate)    # soil→body per tick per kg of tool
+        self.capital_access = str(capital_access)  # open | owner | maker
 
         self.artifacts: list[Artifact] = []
         self._next_aid = ARTIFACT_AID_BASE
@@ -121,6 +146,11 @@ class ArtifactField:
         self.reads: list[tuple] = []               # (t, aid, reader, method, maker, born_t)
         self.copies: list[tuple] = []              # (t, aid, copier, old_method, new_method)
         self.ruins: list[tuple] = []               # (t, aid, cell, returned_mass) — fully decayed
+        # vitok-2 logs (attribution for HG1–HG3; never touch mass):
+        self.stores: list[tuple] = []              # (t, aid, maker, cell, stake)
+        self.capitals: list[tuple] = []            # (t, aid, maker, cell, stake)
+        self.draws: list[tuple] = []               # (t, aid, drawer, amount, maker)
+        self.boosts: list[tuple] = []              # (t, harvester, cell, extra, cap_mass)
 
     # ---- invariant contribution (0.0 when OFF => _matter ≡ canon) --------- #
     def sum_mass(self) -> float:
@@ -142,9 +172,21 @@ class ArtifactField:
         pop_sorted = sorted(world.pop, key=lambda a: a.oid)
         alive = {a.oid for a in world.pop}
         self._update_dwell(pop_sorted)
+        # vitok-2 mints run FIRST, in descending wealth-floor order (capital > store >
+        # vessel): the richest freeze a tool, the rich store a surplus, the merely-fat
+        # write. Any mint resets dwell, so a pawn mints AT MOST ONCE per tick and the
+        # cascade is deterministic. Both passes are no-ops when OFF => the vitok-1
+        # vessel order (writing→reading→copying→decays) is untouched (gate MFv2-OFF).
+        self._capitalizing(world, pop_sorted, t)   # tools by the richest (body→mass)
+        self._storing(world, pop_sorted, t)        # surplus by the rich (body→mass)
         self._writing(world, pop_sorted, t)        # originals on bare cells (body→mass)
         self._reading(world, pop_sorted, t)        # first-contact absorb + refresh salience
         self._copying(world, pop_sorted, t)        # improved copies on readable carriers (body→mass)
+        # vitok-2 flows run AFTER the mints: a store laid this tick is drawable the same
+        # tick by ANOTHER hungry pawn (the minter itself is fat by gate); decays still
+        # run LAST so a newborn object is not eroded on its birth tick.
+        self._store_draw(world, pop_sorted, t)     # hunger draw (mass→body), conserved
+        self._capital_harvest(world, pop_sorted, t)  # tool-gated extraction (soil→body)
         self._material_decay(world, t)             # mass → soil (ruins), conserved
         self._semantic_decay()                     # salience → 0 (forgetting), no mass
         # drop overlay state for the dead (belief only; no mass)
@@ -204,7 +246,10 @@ class ArtifactField:
         (method = the method it already carries, usually 0 for a first-mover): the blind
         first act of deposition. On a cell that already holds a readable carrier it writes
         nothing here — copying (below) improves the existing lineage instead."""
-        occupied = {(art.i, art.j) for art in self.artifacts if art.salience > self.read_threshold}
+        # ONLY a readable VESSEL occupies a cell for writing purposes: a store/capital
+        # standing here must not block the knowledge layer (kind-isolation, vitok 2).
+        occupied = {(art.i, art.j) for art in self.artifacts
+                    if art.kind == "vessel" and art.salience > self.read_threshold}
         for a in pop_sorted:
             if (a.i, a.j) in occupied:             # a readable carrier here -> copying's job
                 continue
@@ -215,9 +260,13 @@ class ArtifactField:
             self.writes.append((t, art.aid, a.oid, (a.i, a.j), self.write_stake, method))
 
     def _readable_bycell(self):
+        # kind-isolation (vitok 2): only a VESSEL is a carrier of meaning. A store or a
+        # capital is semantically mute from birth (salience 0.0, empty payload) — it is
+        # never read, never refreshed, never copied. In a vessel-only world (vitok 1)
+        # the filter is a no-op, so the MF-* anchors stand byte-identical.
         bycell = {}
         for art in self.artifacts:
-            if art.salience > self.read_threshold:
+            if art.kind == "vessel" and art.salience > self.read_threshold:
                 bycell.setdefault((art.i, art.j), []).append(art)
         return bycell
 
@@ -282,6 +331,149 @@ class ArtifactField:
             art = self._mint(world, a, new_method, t, is_copy=True)
             self.copies.append((t, art.aid, a.oid, src.payload.get("method_level", 0), new_method))
 
+    # ==================== VITOK 2: store + capital ========================= #
+    def _access_ok(self, world, art, a, mode) -> bool:
+        """Deterministic access filter — the experimental axis of HG1/HG3:
+        open  — anyone present may use the object (a commons);
+        owner — only the TERRITORIAL owner of the cell it stands on (a locked barn;
+                _cell_owner is the full territorial map, the honest class base);
+        maker — only the author (a private hoard)."""
+        if mode == "open":
+            return True
+        if mode == "maker":
+            return art.maker_oid == a.oid
+        if mode == "owner":
+            return world._cell_owner.get((art.i, art.j)) == a.oid
+        return False
+
+    def _mint_object(self, world, a, kind, stake, t, ev):
+        """Freeze `stake` of body into a semantically MUTE object (store/capital):
+        payload empty, salience 0.0 — matter without meaning. The same body→mass
+        transfer as a vessel mint; resets dwell (one mint per tick, cadence
+        ~1/write_stasis). The invariant holds by construction."""
+        a.body -= stake                            # MASS leaves the body...
+        art = Artifact(aid=self._next_aid, i=a.i, j=a.j, mass=stake,
+                       payload={}, salience=0.0, maker_oid=a.oid, born_t=t, kind=kind)
+        self._next_aid += 1
+        self.artifacts.append(art)
+        self._dwell[a.oid] = ((a.i, a.j), 0)
+        world.log.emit(t, ev, "individual", where=(a.i, a.j), actor=a.oid, dm=-stake,
+                       data={"aid": art.aid, "stake": round(stake, 6)})
+        return art
+
+    # ---- CAPITALIZING: the richest freeze a TOOL (body → mass) ------------ #
+    def _capitalizing(self, world, pop_sorted, t):
+        """A settled pawn rich enough that capital_stake leaves it above
+        CAPITAL_BODY_FLOOR (2·REPRO — the richest stratum only) mints ONE capital on a
+        cell that has none: past labour frozen into a productivity tool. One live tool
+        per cell (a second mill adds nothing; prevents unbounded stacking)."""
+        if not self.capital_on:
+            return
+        has_cap = {(art.i, art.j) for art in self.artifacts if art.kind == "capital"}
+        for a in pop_sorted:
+            if (a.i, a.j) in has_cap:
+                continue
+            if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+                continue
+            if a.body - self.capital_stake < CAPITAL_BODY_FLOOR:
+                continue
+            art = self._mint_object(world, a, "capital", self.capital_stake, t,
+                                    "artifact_capital")
+            self.capitals.append((t, art.aid, a.oid, (a.i, a.j), self.capital_stake))
+            has_cap.add((a.i, a.j))
+
+    # ---- STORING: the rich lay a SURPLUS by (body → mass) ----------------- #
+    def _storing(self, world, pop_sorted, t):
+        """A settled pawn rich enough that store_stake leaves it above STORE_BODY_FLOOR
+        (1.5·REPRO — a surplus beyond reproduction) lays a store on its cell. Stores
+        STACK (a granary grows in heaps): blind accumulation, no intent — the vitok-1
+        question again, now for pure matter."""
+        if not self.store_on:
+            return
+        for a in pop_sorted:
+            if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+                continue
+            if a.body - self.store_stake < STORE_BODY_FLOOR:
+                continue
+            art = self._mint_object(world, a, "store", self.store_stake, t,
+                                    "artifact_store")
+            self.stores.append((t, art.aid, a.oid, (a.i, a.j), self.store_stake))
+
+    # ---- STORE DRAW: hunger unprints the reserve (mass → body) ------------ #
+    def _store_draw(self, world, pop_sorted, t):
+        """A HUNGRY pawn (body < store_draw_at) on a cell with an accessible store
+        extracts min(store.mass, store_draw_rate) back into its body — the inverse of
+        writing, a pure mass transfer (the invariant holds trivially). Draws walk pawns
+        in oid order and stores in aid order (oldest heap first); one draw per pawn per
+        tick. A store drained to zero is swept by material decay the same tick (its
+        remaining 0.0 goes to soil and the object is removed as a ruin)."""
+        if not self.store_on:
+            return
+        bycell = {}
+        for art in self.artifacts:
+            if art.kind == "store" and art.mass > 0.0:
+                bycell.setdefault((art.i, art.j), []).append(art)
+        if not bycell:
+            return
+        for a in pop_sorted:
+            if a.body >= self.store_draw_at:
+                continue
+            here = bycell.get((a.i, a.j))
+            if not here:
+                continue
+            for art in sorted(here, key=lambda ar: ar.aid):
+                if art.mass <= 0.0:
+                    continue
+                if not self._access_ok(world, art, a, self.store_access):
+                    continue
+                amount = min(art.mass, self.store_draw_rate)
+                art.mass -= amount                 # MASS leaves the store...
+                a.body += amount                   # ...and returns to the body
+                self.draws.append((t, art.aid, a.oid, round(amount, 9), art.maker_oid))
+                world.log.emit(t, "artifact_store_draw", "individual",
+                               where=(a.i, a.j), actor=a.oid, dm=amount,
+                               data={"aid": art.aid, "maker": art.maker_oid,
+                                     "amount": round(amount, 6)})
+                break                              # one draw per pawn per tick
+
+    # ---- CAPITAL HARVEST: tool-gated extraction (soil → body) ------------- #
+    def _capital_harvest(self, world, pop_sorted, t):
+        """A pawn on a cell with an accessible capital extracts
+        extra = min(soil[i,j], capital_rate · Σtool_mass) from the SOIL into its body.
+        THE INVARIANT SUBTLETY (the sharpest gate of vitok 2): capital NEVER creates
+        mass — it opens a reservoir (soil) that the canonical eat (which grazes PLANT)
+        cannot reach: irrigation/deep tillage. Productivity is proportional to the
+        tool's remaining mass (a worn mill grinds worse — material decay IS
+        amortisation). Pawns are walked in oid order; each takes from what soil
+        remains — deterministic contention."""
+        if not self.capital_on:
+            return
+        bycell = {}
+        for art in self.artifacts:
+            if art.kind == "capital" and art.mass > 0.0:
+                bycell.setdefault((art.i, art.j), []).append(art)
+        if not bycell:
+            return
+        for a in pop_sorted:
+            here = bycell.get((a.i, a.j))
+            if not here:
+                continue
+            cap_mass = sum(ar.mass for ar in here
+                           if self._access_ok(world, ar, a, self.capital_access))
+            if cap_mass <= 0.0:
+                continue
+            extra = min(float(world.soil[a.i, a.j]), self.capital_rate * cap_mass)
+            if extra <= 0.0:
+                continue
+            world.soil[a.i, a.j] -= extra          # MASS leaves the soil...
+            a.body += extra                        # ...through the tool, into the body
+            self.boosts.append((t, a.oid, (a.i, a.j), round(extra, 9),
+                                round(cap_mass, 9)))
+            world.log.emit(t, "artifact_capital_boost", "individual",
+                           where=(a.i, a.j), actor=a.oid, dm=extra,
+                           data={"cap_mass": round(cap_mass, 6),
+                                 "extra": round(extra, 6)})
+
     # ---- MATERIAL decay: mass → soil (ruins to ground; conserved) --------- #
     def _material_decay(self, world, t):
         """Each tick d = mat_decay·mass returns to world.soil[i,j]. Mass changes form; the
@@ -319,9 +511,14 @@ class ArtifactField:
             return b""
         parts = []
         for art in sorted(self.artifacts, key=lambda a: a.aid):
-            parts.append(f"{art.aid}:{art.i},{art.j}:{art.mass:.9f}:"
-                         f"{art.payload.get('method_level', 0)}:{art.salience:.9f}:"
-                         f"{art.maker_oid}:{art.born_t}")
+            term = (f"{art.aid}:{art.i},{art.j}:{art.mass:.9f}:"
+                    f"{art.payload.get('method_level', 0)}:{art.salience:.9f}:"
+                    f"{art.maker_oid}:{art.born_t}")
+            # vitok 2: kind enters the blob ONLY for non-vessel objects — a vessel term
+            # is byte-identical to vitok 1, so the MF-replay anchor (48d9729d...) stands.
+            if art.kind != "vessel":
+                term += f":{art.kind}"
+            parts.append(term)
         km = ";".join(f"{o}:{self.known_method[o]}" for o in sorted(self.known_method))
         return ("||ARTIFACT||" + "#".join(parts) + "||KM||" + km).encode()
 

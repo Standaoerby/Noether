@@ -101,6 +101,21 @@ class PolisConfig:
     sem_decay: float = 0.02          # semantic-decay rate (salience → 0)
     read_threshold: float = 0.5      # salience below this => unreadable ruin
     salience0: float = 1.0           # starting / copy-refreshed cultural loudness
+    # mod F vitok 2 — store (a printable mass reserve: hunger draws mass→body back)
+    # and capital (a productivity tool: soil→body extraction gated on presence).
+    # Both False => byte-identical to the vitok-1 vessel run (gate MFv2-OFF).
+    # Floors live in artifact.py (STORE_BODY_FLOOR / CAPITAL_BODY_FLOOR — measured
+    # calibration); access ∈ open|owner|maker is the HG1/HG3 experimental axis.
+    store_on: bool = False
+    store_stake: float = 0.30        # kg of body frozen into a store
+    store_draw_at: float = 0.40      # hunger line: body below this may draw
+    store_draw_rate: float = 0.10    # kg per tick a drawer may extract
+    store_access: str = "open"       # open | owner | maker
+    capital_on: bool = False
+    capital_stake: float = 0.50      # kg of body frozen into a tool
+    capital_rate: float = 0.02       # soil→body per tick per kg of tool (measured: 0.10
+                                     # is a demographic pump; 0.02 is minimally invasive)
+    capital_access: str = "open"     # open | owner | maker
 
 
 class Polis(AppropriationWorld):
@@ -150,6 +165,11 @@ class Polis(AppropriationWorld):
             write_stake=cfg.write_stake, mat_decay=cfg.mat_decay,
             sem_decay=cfg.sem_decay, read_threshold=cfg.read_threshold,
             salience0=cfg.salience0,
+            store_on=cfg.store_on, store_stake=cfg.store_stake,
+            store_draw_at=cfg.store_draw_at, store_draw_rate=cfg.store_draw_rate,
+            store_access=cfg.store_access,
+            capital_on=cfg.capital_on, capital_stake=cfg.capital_stake,
+            capital_rate=cfg.capital_rate, capital_access=cfg.capital_access,
         )
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
