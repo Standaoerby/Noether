@@ -336,8 +336,75 @@ def _hg3(seeds=(7, 8, 9), days=300):
 
 
 # --------------------------------------------------------------------------- #
-#  Main                                                                        #
+#  Calibration battery (--cal): closes the two measured tails of vitok 2       #
 # --------------------------------------------------------------------------- #
+def _cal1(seeds=(7, 8, 9), days=300):
+    """CAL-1 — HG1 robustness sweep. The vitok-2 NULL ('a store does not buy survival')
+    was measured at ONE thrifty calibration (draw_at=0.40, draw_rate=0.10). Sweep the
+    hunger line and the draw speed up to a greedy regime, plus the maker-access hoard.
+    If the sign of Δdeaths vs OFF keeps flipping across seeds in EVERY cell, the NULL
+    is a property of the geometry (stores mint on sated land), not of the thresholds."""
+    print(f"\n{HDR}\nCAL-1 — store threshold sweep: does the HG1 survival-NULL outlive a\n"
+          f"generous calibration? (Δdeaths = ON−OFF per seed; med.life in brackets)\n{HDR}")
+    cells = (("rate .10 at .40 (dflt)", dict(store_draw_rate=0.10, store_draw_at=0.40)),
+             ("rate .30 at .40", dict(store_draw_rate=0.30, store_draw_at=0.40)),
+             ("rate 1.0 at .40", dict(store_draw_rate=1.00, store_draw_at=0.40)),
+             ("rate .10 at .70", dict(store_draw_rate=0.10, store_draw_at=0.70)),
+             ("rate .30 at .70", dict(store_draw_rate=0.30, store_draw_at=0.70)),
+             ("rate 1.0 at .70", dict(store_draw_rate=1.00, store_draw_at=0.70)),
+             ("maker-hoard (dflt thr)", dict(store_access="maker")))
+    base = {}
+    for s in seeds:
+        w = _run(_cfg2(seed=s, days=days), days)
+        d, m = _life_stats(w)
+        base[s] = (d, m)
+    print(f"  OFF baseline: " + "  ".join(f"s{s}: {base[s][0]} ({base[s][1]})" for s in seeds))
+    print(f"  {'cell':<24}" + "".join(f"{f's{s} Δd (life)':>16}" for s in seeds) + f"{'Σdrawn':>9}")
+    for label, kw in cells:
+        row = f"  {label:<24}"
+        drawn_tot = 0.0
+        for s in seeds:
+            w = _run(_cfg2(store=True, seed=s, days=days, **kw), days)
+            assert w.matter_drift() < 1e-9, f"CAL-1 leaked ({label}, s{s})"
+            d, m = _life_stats(w)
+            drawn_tot += sum(x[3] for x in w._artifacts.draws)
+            row += f"{d - base[s][0]:>+9d} ({m:>2}) "
+        print(row + f"{drawn_tot:>8.1f}")
+    print("\n  read: a robust NULL = Δdeaths sign flips across seeds in every cell even")
+    print("  as Σdrawn grows an order of magnitude; a threshold artifact = Δdeaths goes")
+    print("  uniformly negative once the draw is generous.")
+
+
+def _cal2(seeds=(7, 8, 9), days=300):
+    """CAL-2 — capital access matrix. Vitok 2 ran only open access. owner locks the
+    harvest to the territorial holder of the cell; maker locks it to the tool's author.
+    Reads: flow volume, who catches it (historical-owner share, maker share), and the
+    demographic footprint. Rate held at the minimally-invasive default (0.02)."""
+    print(f"\n{HDR}\nCAL-2 — capital access matrix (open | owner | maker · rate 0.02)\n{HDR}")
+    print(f"  {'seed':>5}{'access':>8}{'boosts':>8}{'Σextra':>9}{'own%':>7}{'mkr%':>7}"
+          f"{'pop':>6}{'drift':>10}")
+    for s in seeds:
+        for mode in ("open", "owner", "maker"):
+            w, _int, T = _run_with_history(
+                _cfg2(store=True, capital=True, capital_rate=0.02,
+                      capital_access=mode, seed=s, days=days), days)
+            af = w._artifacts
+            tot = sum(b[3] for b in af.boosts)
+            by_h = defaultdict(float)
+            for (_t, oid, _cell, extra, _cm) in af.boosts:
+                by_h[oid] += extra
+            own = (sum(v for o, v in by_h.items() if o in T) / tot) if tot > 0 else float("nan")
+            makers = {c[2] for c in af.capitals}
+            mkr = (sum(v for o, v in by_h.items() if o in makers) / tot) if tot > 0 else float("nan")
+            print(f"  {s:>5}{mode:>8}{len(af.boosts):>8}{tot:>9.1f}{own:>7.2f}{mkr:>7.2f}"
+                  f"{len(w.pop):>6}{w.matter_drift():>10.1e}")
+    print("\n  read: own% = share of the flow caught by the HISTORICAL owner class;")
+    print("  mkr% = share caught by the tools' authors. open showed 0.88 to the land")
+    print("  through geography; owner locks it by RULE (expect ~1.0, volume drops as")
+    print("  non-owners on the cell are barred); maker is the pure private tool.")
+
+
+
 def main():
     print(HDR)
     print("mod F — vitok 2: store + capital. Detached, accumulable mass on the vessel")
@@ -357,6 +424,10 @@ def main():
         _hg2()
     if "--hg3" in sys.argv or "--all" in sys.argv:
         _hg3()
+    if "--cal1" in sys.argv or "--cal" in sys.argv:
+        _cal1()
+    if "--cal2" in sys.argv or "--cal" in sys.argv:
+        _cal2()
     print(f"\n{HDR}\nmod F vitok 2 gates green: store/capital OFF ≡ vitok 1 (MFv2-OFF), the")
     print("four-term invariant survives the harshest pump (MFv2-mass), the new kinds are")
     print(f"semantically mute (MFv2-semantic), and the run replays bit-exact (MFv2-replay).\n{HDR}")
