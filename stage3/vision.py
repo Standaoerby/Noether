@@ -9,16 +9,23 @@ claim cannot say "there is a store at (9,8)". So finding-6 stayed conditional ("
 nobody knows about does not save"). Vitok 3 closes the blindness→sight axis with the single
 most natural injection possible.
 
-ONE injection, ZERO new forces. At the end of Polis.step (after the artifact passes, before
-the next canonical decision), for each LIVING pawn standing on a cell (i,j):
+V1 (kept in history as a reference) wrote the vision at the END of Polis.step and was
+behaviourally INERT: the canonical think-cycle is observe→decide, and _observe overwrites
+mem[own_cell] with the bare true-plant value the tick BEFORE decide reads it — so the
+post-hoc write never survived to a decision. V2 puts the vision where it belongs: INSIDE
+perception. Polis overrides _observe to call the canonical super()._observe first (true
+plant, freshness stamp, hearsay drop) and THEN fold in the standing store, so the order is
+correct by construction (our observe → decide → move).
 
-    drawable = Σ mass over the STORES on (i,j) that pass THIS pawn's access filter
+ONE organ, ZERO new forces. `observe_stores(world, a)` runs for the pawn being sensed:
+
+    drawable = Σ mass over the LIVE STORES on a's cell that pass a's access filter
     if store_vision and drawable > 0:
-        mem[oid][(i,j)] = (true_plant(i,j) + drawable, t)   # EXACTLY the visit format
+        mem[a.oid][(a.i,a.j)] = (true_plant(a.i,a.j) + drawable, world.t)   # visit format
 
 Why this is "maximal naturalness", not a new power:
-  * OWN CELL ONLY. Symmetric with plant: the canon learns the truth of a cell by BEING on
-    it (_observe). No vision radius is introduced.
+  * OWN CELL ONLY. Symmetric with plant: the canon learns a cell's truth by BEING on it.
+    No vision radius is introduced.
   * STORE ONLY. A granary is the same "food is here" modality as a bush. CAPITAL does not
     convert to food honestly (its food-equivalent rate·mass ≈ 0.005–0.05 vs plant food
     8–18 — a ghost signal), and a VESSEL is not food at all; both are out of this vitok.
@@ -29,55 +36,41 @@ Why this is "maximal naturalness", not a new power:
     the belief map `mem`. The four-term invariant is intact by construction.
   * WORD-OF-MOUTH FOR FREE. A speaker whose memory now holds a store-cell as valuable will
     point listeners at it through the ORDINARY claim channel; liars, trust and reputation
-    all engage without a single new line in the communication modules. No special
-    "gossip-about-stores" channel is added.
+    all engage without a single new line in the communication modules.
 
-The write mirrors CommWorld._observe byte-for-byte in FORMAT: the value tuple is
-(float food, world.t) and the cell is dropped from `from_hearsay` (a directly-sensed cell,
-not hearsay) — read from the canon and repeated, not invented.
+The value tuple format is exactly CommWorld._observe's, (float food, world.t). The hearsay
+discard for this cell was already done by the canonical super()._observe that ran first, so
+we do not touch from_hearsay here (its semantics are left intact).
 """
 from __future__ import annotations
 
 
-def apply_store_vision(world) -> int:
-    """Inject drawable-store value into each living pawn's OWN-cell memory. Pure belief
-    write (world.mem / world.from_hearsay); returns the number of cells written (for the
-    MFv3-belief gate / HV instrumentation). No-op when the artifact field is off."""
+def observe_stores(world, a) -> bool:
+    """Fold the drawable standing store on pawn `a`'s own cell into its cell-memory.
+    Called from Polis._observe AFTER the canonical super()._observe(a). Pure belief write;
+    returns True iff it wrote (for gate/instrumentation). No-op when the store layer is off
+    or nothing accessible stands here."""
     af = getattr(world, "_artifacts", None)
     if af is None or not af.on or not af.store_on:
-        return 0
+        return False
     mem = getattr(world, "mem", None)
     if mem is None:                       # cell-memory layer absent from the stack -> STOP
         raise RuntimeError("store_vision: world has no cell memory (mem) — layer disabled")
+    reg = mem.get(a.oid)
+    if reg is None:
+        return False
 
-    # live stores grouped by cell (aid order preserved for determinism, though the sum is
-    # order-independent). Only stores with mass are visible as value.
-    stores_by_cell: dict[tuple, list] = {}
+    ai, aj = a.i, a.j
+    # access filter IN THE EYES: only stores this pawn could actually draw are seen as
+    # value (a locked foreign granary is invisible). Same _access_ok as _store_draw.
+    drawable = 0.0
     for art in af.artifacts:
-        if art.kind == "store" and art.mass > 0.0:
-            stores_by_cell.setdefault((art.i, art.j), []).append(art)
-    if not stores_by_cell:
-        return 0
+        if (art.kind == "store" and art.mass > 0.0 and art.i == ai and art.j == aj
+                and af._access_ok(world, art, a, af.store_access)):
+            drawable += art.mass
+    if drawable <= 0.0:
+        return False
 
-    written = 0
-    hearsay = getattr(world, "from_hearsay", None)
-    for a in sorted(world.pop, key=lambda x: x.oid):
-        cell = (a.i, a.j)
-        here = stores_by_cell.get(cell)
-        if not here:
-            continue
-        # access filter IN THE EYES: only stores this pawn could actually draw are seen as
-        # value (a locked foreign granary is invisible). Same filter as _store_draw.
-        drawable = sum(art.mass for art in here
-                       if af._access_ok(world, art, a, af.store_access))
-        if drawable <= 0.0:
-            continue
-        reg = mem.get(a.oid)
-        if reg is None:                   # a pawn with no memory record (should not happen)
-            continue
-        true_plant = float(world.plant[a.i, a.j])
-        reg[cell] = (true_plant + drawable, world.t)     # _observe's exact tuple format
-        if hearsay is not None and a.oid in hearsay:
-            hearsay[a.oid].discard(cell)                 # sensed, not hearsay (mirror _observe)
-        written += 1
-    return written
+    true_plant = float(world.plant[ai, aj])
+    reg[(ai, aj)] = (true_plant + drawable, world.t)     # _observe's exact tuple format
+    return True

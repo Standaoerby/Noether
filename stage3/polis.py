@@ -116,10 +116,16 @@ class PolisConfig:
     capital_rate: float = 0.02       # soil→body per tick per kg of tool (measured: 0.10
                                      # is a demographic pump; 0.02 is minimally invasive)
     capital_access: str = "open"     # open | owner | maker
-    # mod F vitok 3 — store_vision: put a drawable store on the pawn's OWN cell INTO its
-    # cell-memory (belief only; mass untouched), so the navigation/claim loop can finally
-    # see the granary the bush hid. False => byte-identical to vitok 2 (gate MFv3-OFF).
-    # See stage3/vision.py; access-filtered, store-only, own-cell-only — no new force.
+    # mod F vitok 3 (v2) — two flags, both OFF => byte-identical to vitok 2.
+    #  store_settle: a store minted this tick is not drawable until the next (a physical
+    #    settling pause; delays transfer one tick so the object STANDS long enough to be
+    #    seen — the fix for v1 diagnosis (b): stores annihilated at the point of demand).
+    #  store_vision: an ORGAN inside canonical perception. Polis overrides _observe so a
+    #    pawn, on sensing its own cell, also folds the drawable standing store on it into
+    #    cell-memory (belief only; mass untouched) — the fix for v1 diagnosis (a): the
+    #    post-hoc end-of-step write was overwritten by the next _observe before decide.
+    #    Store-only, own-cell-only, access-filtered in the eyes. See stage3/vision.py.
+    store_settle: bool = False
     store_vision: bool = False
 
 
@@ -172,7 +178,7 @@ class Polis(AppropriationWorld):
             salience0=cfg.salience0,
             store_on=cfg.store_on, store_stake=cfg.store_stake,
             store_draw_at=cfg.store_draw_at, store_draw_rate=cfg.store_draw_rate,
-            store_access=cfg.store_access,
+            store_access=cfg.store_access, store_settle=cfg.store_settle,
             capital_on=cfg.capital_on, capital_stake=cfg.capital_stake,
             capital_rate=cfg.capital_rate, capital_access=cfg.capital_access,
         )
@@ -200,6 +206,19 @@ class Polis(AppropriationWorld):
     def _rows(self):    # for directive means-selector (grid rows)
         from sim_comm import R
         return R
+
+    # ---- mod F vitok 3 (v2): store_vision as an organ inside canonical perception ---- #
+    def _observe(self, a):
+        """Documented canon seam (same pattern mod B used to swap the speaker): run the
+        canonical CommWorld._observe (senses true plant, stamps freshness, drops hearsay),
+        THEN, if store_vision is on, fold the drawable standing store on this pawn's OWN
+        cell into its cell-memory. Order is correct by construction — our observe (truth +
+        vision) precedes decide within the think cycle — which is exactly what v1's
+        end-of-step write could not achieve. Belief only; no mass is touched."""
+        super()._observe(a)
+        if self.cfg.store_vision:
+            from .vision import observe_stores
+            observe_stores(self, a)
 
     # ---- the awakening: pick a living pawn to carry the voice -------------- #
     def _awaken(self):
@@ -249,12 +268,6 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
-        # mod F vitok 3: store_vision — the ONLY canon-touching seam of this vitok, a pure
-        # belief write into cell memory (never mass), after the artifact passes and before
-        # the next tick's canonical decision. No-op when the flag is off (gate MFv3-OFF).
-        if self.cfg.store_vision:
-            from .vision import apply_store_vision
-            apply_store_vision(self)
 
     def _matter(self):
         # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
