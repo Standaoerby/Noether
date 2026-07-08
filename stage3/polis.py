@@ -116,6 +116,11 @@ class PolisConfig:
     capital_rate: float = 0.02       # soil→body per tick per kg of tool (measured: 0.10
                                      # is a demographic pump; 0.02 is minimally invasive)
     capital_access: str = "open"     # open | owner | maker
+    # mod F vitok 3 — store_vision: put a drawable store on the pawn's OWN cell INTO its
+    # cell-memory (belief only; mass untouched), so the navigation/claim loop can finally
+    # see the granary the bush hid. False => byte-identical to vitok 2 (gate MFv3-OFF).
+    # See stage3/vision.py; access-filtered, store-only, own-cell-only — no new force.
+    store_vision: bool = False
 
 
 class Polis(AppropriationWorld):
@@ -244,6 +249,12 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
+        # mod F vitok 3: store_vision — the ONLY canon-touching seam of this vitok, a pure
+        # belief write into cell memory (never mass), after the artifact passes and before
+        # the next tick's canonical decision. No-op when the flag is off (gate MFv3-OFF).
+        if self.cfg.store_vision:
+            from .vision import apply_store_vision
+            apply_store_vision(self)
 
     def _matter(self):
         # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
