@@ -144,13 +144,18 @@ class _Houses:
 # --------------------------------------------------------------------------- #
 #  config                                                                      #
 # --------------------------------------------------------------------------- #
-def build_showcase_cfg(seed=7, days=400):
+def build_showcase_cfg(seed=7, days=400, arena_side=6):
     """The showcase: everything the colony achieved in one run — appropriation economy,
     Dunbar social locus, the full artifact reservoir (vessel + store + capital), and a
     Demerzel that awakens ~tick 100 with an IMPLANT agenda. Signatures verified against
-    PolisConfig; the IMPLANT example is the working one from run_polis.py."""
+    PolisConfig; the IMPLANT example is the working one from run_polis.py.
+
+    arena_side is the ONLY exposed geometry knob (WO_glass-legibility §2.9): the DEFAULT
+    stays box6 (arena_side=6) so the shipped package SHA stays the anchor and the science
+    (vitok-2 findings, HG-hypotheses) lives where it was measured. arena_side=None frees the
+    full 14×14 field — a SHOWCASE mode (denser, all cells inhabited), NOT a science regime."""
     return PolisConfig(
-        appropriation=0.5, owner_policy="claim", arena_side=6,
+        appropriation=0.5, owner_policy="claim", arena_side=arena_side,
         seed=seed, days=days,
         dunbar_K=15,                                   # mod-E demo default (ME-mass/replay)
         artifacts=True, store_on=True, capital_on=True, capital_rate=0.02,
@@ -273,8 +278,8 @@ def run_capture(cfg, every):
     return w, snapshots
 
 
-def export(out_dir, seed=7, days=400, every=1, verbose=True):
-    cfg = build_showcase_cfg(seed=seed, days=days)
+def export(out_dir, seed=7, days=400, every=1, arena_side=6, verbose=True):
+    cfg = build_showcase_cfg(seed=seed, days=days, arena_side=arena_side)
     w, snapshots = run_capture(cfg, every)
 
     events = w.log.events
@@ -346,12 +351,16 @@ def main():
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--days", type=int, default=400)
     ap.add_argument("--every", type=int, default=1)
+    ap.add_argument("--arena", type=str, default="6",
+                    help="arena_side: integer (default 6=box6, the science/anchor regime) "
+                         "or 'none' for the full 14x14 field (showcase mode).")
     ap.add_argument("--out", type=str, default=None)
     args = ap.parse_args()
+    arena = None if args.arena.lower() == "none" else int(args.arena)
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "..", "viz", "glass", "data")
     out = os.path.normpath(out)
-    export(out, seed=args.seed, days=args.days, every=args.every)
+    export(out, seed=args.seed, days=args.days, every=args.every, arena_side=arena)
 
 
 if __name__ == "__main__":

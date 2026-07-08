@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  «Стеклянный полис» — Glass Polis renderer (WO_glass-polis.md §4/§5).
+  «Стеклянный полис» — Glass Polis renderer (WO_glass-polis.md §4/§5 + WO_glass-legibility.md).
 
   ONE self-contained file: vanilla JS + <canvas>, ZERO external deps, ZERO CDN, ZERO build.
   Opens by double-click offline (drag the three data files onto the window) OR over a local
@@ -9,22 +9,29 @@
   (snapshot index, sub-tick fraction). Wall-clock time drives ONLY playback advance and the
   bloom/fade of event flashes — never the state geometry. No Math.random() anywhere.
 
-  HEURISTICS (Э-N — tasteful calls, candidates for revision; each marked `// Э-N:` in code):
-    Э-1  house palette: hue = (house_id * 137.508) % 360 (golden angle), fixed s/l.
-    Э-2  scales: body radius r = clamp(4 + 10*sqrt(body/REPRO), 4, 26)px; salience glow on a
-         γ≈0.6 curve so fading reads in the loud zone. Knobs live in the ?debug=1 panel.
-    Э-3  Dunbar edges: exporter caps top-8 known per pawn; if a frame has > 600 edges we draw
-         only intra-cluster (cell + 8 neighbours) ones. Layer defaults OFF when pop > 120.
-    Э-4  event density: > 5 of one type on a cell aggregate into one glyph with a count
-         ("×23"); artifact_capital_boost is ALWAYS aggregated to one pulse/tick (summed dm).
-    Э-5  collisions: pawns sharing a cell fan out on a Fibonacci spiral (deterministic by
-         oid); artifacts sit in cell corners by kind (vessel NW, store NE, capital SW), the
-         Demerzel eye SE.
-    Э-6  interpolation: a pawn position is lerped ONLY when |Δi|+|Δj| == 1 between snapshots;
-         a longer jump teleports (birth/death oid-reuse must not read as a glide). Soil/plant
-         fields (stored every 10 ticks) are linearly interpolated by tick.
-    Э-7  three canvas layers (ground / stable glyphs / flashes); ground redraws only on tick
-         change; requestAnimationFrame; no heavy blur on hundreds of objects.
+  URL params:  ?debug=1  (Э-2 knob panel)   ?t=N  (seek to tick N, paused — for screenshots)
+
+  HEURISTICS (Э-N — tasteful calls, candidates for revision; each marked `// Э-N:` in code).
+  The legibility pass revised four of them (marked Э-N-rev2, reason given):
+    Э-1       house palette: hue = (house_id * 137.508) % 360 (golden angle), fixed s/l.
+    Э-1-rev2  ownership frames use the house hue at LOWER lightness (l≈38) so a cell border
+              never competes with the body fill it surrounds (diagnosis: frames as loud as
+              bodies). Dashed, single low alpha.
+    Э-2-rev2  bodies are the protagonists: artifact glyphs are −30% in size, alpha ≤0.8,
+              thin outline, and the salience halo rides a STEEPER γ (≈1.1) + smaller radius,
+              so a gear no longer shouts over a pawn. Pawns draw on top (z-order). Knobs in
+              ?debug=1.
+    Э-3-rev2  Dunbar edges: 1px, alpha ∝ w, drawn ONLY for ties spanning ≤ 2 cells (the blur
+              clouds were long faint edges); if a frame still has > 300 such edges the layer
+              auto-hides behind a plaque ("данбар скрыт … клавиша 5"). Default OFF at pop>120.
+    Э-4       event density: > 5 of one type on a cell aggregate into one glyph with a count
+              ("×23"); artifact_capital_boost is ALWAYS aggregated to one pulse/tick.
+    Э-5       collisions: pawns fan out on a Fibonacci spiral (deterministic by oid); arts in
+              cell corners by kind (vessel NW, store NE, capital SW), the Demerzel eye SE.
+    Э-6       interpolation: a pawn is lerped ONLY when |Δi|+|Δj| == 1 between snapshots; a
+              longer jump teleports. Soil/plant fields (every 10 ticks) lerp by tick.
+    Э-7       three canvas layers (ground / glyphs / flashes); ground redraws only on tick
+              change; requestAnimationFrame; no heavy blur on hundreds of objects.
 -->
 <html lang="ru">
 <head>
@@ -42,7 +49,7 @@
     font:13px/1.4 "Segoe UI",system-ui,sans-serif;overflow:hidden}
   #app{display:grid;grid-template-columns:1fr 340px;grid-template-rows:1fr auto;height:100vh}
   #stage{position:relative;grid-row:1;grid-column:1;overflow:hidden;background:#06070a}
-  #stage canvas{position:absolute;top:0;left:0}
+  #cGround,#cGlyph,#cFlash{position:absolute;top:0;left:0}
   #side{grid-row:1/3;grid-column:2;background:var(--panel);border-left:1px solid var(--line);
     display:flex;flex-direction:column;overflow:hidden}
   #controls{grid-row:2;grid-column:1;background:var(--panel);border-top:1px solid var(--line);
@@ -63,6 +70,8 @@
   .ev{padding:2px 6px;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
   .ev:hover{background:var(--panel2)}
+  .ev.grp{font-weight:600}
+  .ev.child{padding-left:20px;color:var(--dim);font-weight:400}
   .k{color:var(--dim)}
   .plaque{display:inline-block;padding:2px 8px;border-radius:5px;font-weight:600}
   .plaque.ok{background:rgba(57,217,138,.15);color:var(--good);border:1px solid var(--good)}
@@ -71,7 +80,7 @@
   .mrow b{font-variant-numeric:tabular-nums}
   canvas.spark{background:var(--panel2);border-radius:4px;display:block;margin-top:2px}
   #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    flex-direction:column;gap:10px;background:rgba(6,7,10,.94);z-index:20;text-align:center;padding:24px}
+    flex-direction:column;gap:10px;background:rgba(6,7,10,.94);z-index:30;text-align:center;padding:24px}
   #drop.hide{display:none}
   #drop .big{font-size:18px;color:var(--accent)}
   #drop code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--ink)}
@@ -79,8 +88,33 @@
     border-radius:8px;padding:8px 10px;z-index:15;display:none}
   #debug.show{display:block}
   #debug label{display:block;margin:3px 0;color:var(--dim)}
+  #debug input{width:120px}
   #hint{position:absolute;bottom:8px;left:8px;color:var(--dim);font-size:11px;z-index:5;
     background:rgba(6,7,10,.5);padding:3px 7px;border-radius:5px}
+  /* legend */
+  #legend{position:absolute;top:8px;right:8px;z-index:16;background:rgba(18,21,29,.96);
+    border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  #lgCanvas{display:block}
+  #legend.hide{display:none}
+  #legend h4{margin:0 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+  #legend .lgclose{position:absolute;top:4px;right:8px;cursor:pointer;color:var(--dim)}
+  /* tooltip */
+  #tip{position:absolute;z-index:25;pointer-events:none;background:rgba(10,12,18,.96);
+    border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;
+    color:var(--ink);white-space:nowrap;display:none;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+  /* dunbar plaque */
+  #dunbarPlaque{position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:14;
+    background:rgba(18,21,29,.9);border:1px solid var(--line);border-radius:6px;
+    padding:3px 9px;color:var(--dim);font-size:12px;display:none}
+  /* onboarding */
+  #onboard{position:absolute;inset:0;z-index:28;display:flex;align-items:center;
+    justify-content:center;background:rgba(6,7,10,.82);text-align:left;padding:24px}
+  #onboard.hide{display:none}
+  #onboard .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:20px 24px;max-width:520px}
+  #onboard h2{margin:0 0 10px;color:var(--accent);font-size:18px}
+  #onboard ul{margin:0 0 10px;padding-left:18px} #onboard li{margin:4px 0}
+  #onboard .cta{color:var(--dim);font-size:12px;margin-top:8px}
   .tag{font-size:10px;color:var(--dim)}
 </style>
 </head>
@@ -90,13 +124,37 @@
     <canvas id="cGround"></canvas>
     <canvas id="cGlyph"></canvas>
     <canvas id="cFlash"></canvas>
-    <div id="debug">
-      <b>debug (Э-2)</b>
-      <label>body γ-scale <input id="dScale" type="range" min="4" max="20" value="10"></label>
-      <label>salience γ <input id="dGamma" type="range" min="20" max="120" value="60"></label>
-      <label>glyph×mass <input id="dGlyph" type="range" min="10" max="40" value="22"></label>
+
+    <div id="legend" class="hide">
+      <span class="lgclose" id="lgClose">×</span>
+      <h4>Легенда (L)</h4>
+      <canvas id="lgCanvas" width="266" height="216"></canvas>
     </div>
-    <div id="hint">space play/pause · ←/→ шаг · 1–7 слои · клик по телу/артефакту — инспектор</div>
+    <div id="tip"></div>
+    <div id="dunbarPlaque"></div>
+
+    <div id="debug">
+      <b>debug (Э-2-rev2)</b>
+      <label>body scale <input id="dScale" type="range" min="4" max="20" value="10"></label>
+      <label>salience γ <input id="dGamma" type="range" min="40" max="200" value="110"></label>
+      <label>glyph×mass <input id="dGlyph" type="range" min="8" max="30" value="15"></label>
+    </div>
+    <div id="hint">space play/pause · ←/→ шаг · 1–7 слои · Shift+N фокус · L легенда · ? помощь · клик — инспектор</div>
+
+    <div id="onboard" class="hide">
+      <div class="card">
+        <h2>Как читать «Стеклянный полис»</h2>
+        <ul>
+          <li><b>Кружки</b> — пешки: цвет = дом (родовая линия), размер ∝ масса тела, обводка = фаза жизни.</li>
+          <li><b>Глифы</b> — артефакты: стела ▮ = знание (vessel), амбар ⌂ = запас (store), шестерня ⚙ = орудие (capital). Гало ∝ «громкость» (salience); погасло при живой массе = <b>руина</b>.</li>
+          <li><b>Рамка клетки</b> — территория владельца. <b>Око</b> в углу — Демерзель (голос бога), цвет = директива.</li>
+          <li><b>Земля</b> — тёмная почва + зелёный растительный слой. <b>Плашка инварианта</b> справа зелёная, пока масса сходится.</li>
+          <li>Играй пробелом, тыкай в тела/артефакты, наводи мышь для подсказки. Клавиша <b>L</b> — легенда.</li>
+        </ul>
+        <div class="cta">клик или Esc — закрыть · <b>?</b> — снова</div>
+      </div>
+    </div>
+
     <div id="drop">
       <div class="big">Стеклянный полис</div>
       <div>Перетащи сюда <code>meta.json</code>, <code>snapshots.jsonl</code>, <code>events.jsonl</code></div>
@@ -145,6 +203,7 @@
         <option value="8">8×</option><option value="16">16×</option>
       </select>
       <span class="k" id="tickLabel" style="margin-left:auto">t —</span>
+      <button id="btnLegend">легенда (L)</button>
       <button id="btnPng">кадр в PNG</button>
     </div>
     <div class="row">
@@ -165,18 +224,22 @@ const LAYERS = [
 ];
 const S = {
   meta:null, snaps:[], events:[], evByTick:new Map(), snapByT:new Map(),
-  fieldFrames:[],            // snapshot indices carrying soil/plant
+  fieldFrames:[],
   idx:0, frac:0, playing:false, speed:1, lastTs:0,
-  layer:{}, sel:null,        // sel = {kind:'pawn'|'art', id}
-  chronFilter:"*", REPRO:0.92, gridR:14, gridC:14, M0:0,
-  cell:32, ox:0, oy:0,       // layout: cell px + grid origin
-  dbg:{scale:10, gamma:0.60, glyph:22},
+  layer:{}, sel:null, focus:null,       // focus = layer key or null
+  chronFilter:"*", chronExpanded:new Set(),
+  REPRO:0.92, readThr:0.5, gridR:14, gridC:14, M0:0,
+  cell:32, ox:0, oy:0,
+  dbg:{scale:10, gamma:1.10, glyph:15},  // Э-2-rev2 defaults (dimmer/smaller artifacts)
+  _dunbarHidden:0,
 };
 LAYERS.forEach(l=>S.layer[l.key]=true);
 
 const $=id=>document.getElementById(id);
 const cG=$("cGround"), cM=$("cGlyph"), cF=$("cFlash");
 const gx=cG.getContext("2d"), mx=cM.getContext("2d"), fx=cF.getContext("2d");
+const S_ACCENT="#6cc5ff", S_BAD="#ff5d6c", S_GOOD="#39d98a", S_GOLD="#ffcf5c", S_VIOLET="#b98cff";
+const AURA={PROMOTE:S_GOLD, SOW_DISCORD:S_BAD, IMPLANT:S_VIOLET};
 
 // ============================ loading ============================
 async function tryFetch(){
@@ -194,7 +257,6 @@ function parseJsonl(t){
   const tail=t.slice(s).trim(); if(tail)out.push(JSON.parse(tail));
   return out;
 }
-// drag & drop (file:// path — fetch is blocked there)
 const drop=$("drop");
 ["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();}));
 window.addEventListener("drop",async e=>{
@@ -213,23 +275,30 @@ window.addEventListener("drop",async e=>{
 function boot(meta,snaps,events){
   S.meta=meta; S.snaps=snaps; S.events=events;
   S.gridR=meta.grid_rows; S.gridC=meta.grid_cols; S.M0=meta.M0;
-  if(meta.cfg && meta.cfg.REPRO) S.REPRO=meta.cfg.REPRO;
-  // indexes
+  if(meta.cfg){ if(meta.cfg.REPRO) S.REPRO=meta.cfg.REPRO;
+    if(meta.cfg.read_threshold!=null) S.readThr=meta.cfg.read_threshold; }
   S.evByTick=new Map();
   for(const e of events){ if(!S.evByTick.has(e.t))S.evByTick.set(e.t,[]); S.evByTick.get(e.t).push(e); }
   S.snapByT=new Map(); S.fieldFrames=[];
   snaps.forEach((s,i)=>{ S.snapByT.set(s.t,i); if(s.soil)S.fieldFrames.push(i); });
   buildChronFilter();
-  // Э-3: the Dunbar layer defaults OFF when the film ever exceeds ~120 pawns (edges become
-  // an unreadable hairball); the user can still switch it on with checkbox 5.
+  // Э-3-rev2: Dunbar defaults OFF when the film ever exceeds ~120 pawns.
   const maxPop=Math.max(0,...snaps.map(s=>s.metrics.pop));
-  if(maxPop>120){ S.layer.dunbar=false;
-    const cb=layerRow.querySelector('label[data-key="dunbar"] input'); if(cb)cb.checked=false; }
+  if(maxPop>120){ S.layer.dunbar=false; }
+  syncLayerBoxes();
   drop.classList.add("hide");
+  // ?t=N — seek to a tick, paused (deterministic frame for screenshots/deep links)
+  const params=new URLSearchParams(location.search);
+  const tp=params.get("t");
   S.idx=0; S.frac=0;
-  $("scrub").max=Math.max(0,snaps.length-1);
-  resize(); requestAnimationFrame(loop);
+  if(tp!==null){ const tt=+tp; let bi=0; for(let i=0;i<snaps.length;i++){ if(snaps[i].t<=tt)bi=i; } S.idx=bi; }
+  $("scrub").max=Math.max(0,snaps.length-1); $("scrub").value=S.idx;
   $("mM0").textContent=S.M0;
+  drawLegend();
+  if(params.get("legend")==="1") $("legend").classList.remove("hide");
+  // onboarding: show once per open, unless a seek is requested (keep the frame clean)
+  if(tp===null) $("onboard").classList.remove("hide");
+  resize(); requestAnimationFrame(loop);
 }
 
 // ============================ layout ============================
@@ -242,7 +311,6 @@ function resize(){
   S._groundDirty=true;
 }
 window.addEventListener("resize",resize);
-// cell(i,j) -> pixel top-left. NOTE: i indexes rows (y), j indexes cols (x).
 const cellX=j=>S.ox + j*S.cell, cellY=i=>S.oy + i*S.cell;
 const cellCx=j=>cellX(j)+S.cell/2, cellCy=i=>cellY(i)+S.cell/2;
 
@@ -254,15 +322,16 @@ function houseColor(h, l=58, s=68){
 }
 const PHASE_RING={INFANT:"#7fd0ff", MATURE:"#e6e9f0", ELDER:"#9aa0b3"};
 
+// per-layer focus alpha (Shift+N focus mode)
+function la(key){ return (S.focus===null || S.focus===key) ? 1 : 0.15; }
+
 // ============================ interpolation helpers ============================
-function curSnaps(){ // (A,B,frac) — B is the tick being entered
+function curSnaps(){
   const A=S.snaps[S.idx];
   const B=S.snaps[Math.min(S.idx+1,S.snaps.length-1)];
   return [A,B,S.idx+1<=S.snaps.length-1?S.frac:0];
 }
 function displayTick(){ const [,B]=curSnaps(); return B.t; }
-
-// Э-6: linear field interpolation between the every-10 soil/plant frames.
 function fieldAt(tick){
   const ff=S.fieldFrames; if(!ff.length) return null;
   let lo=ff[0], hi=ff[ff.length-1];
@@ -275,7 +344,7 @@ function fieldAt(tick){
   return {soil,plant};
 }
 
-// ============================ drawing: ground (layer 1) ============================
+// ============================ ground (layer 1) ============================
 let _lastGroundTick=-1;
 function drawGround(tick){
   gx.clearRect(0,0,cG.width,cG.height);
@@ -287,14 +356,11 @@ function drawGround(tick){
   for(let i=0;i<S.gridR;i++) for(let j=0;j<S.gridC;j++){
     const q=i*S.gridC+j;
     const sv=f.soil[q]/smax, pv=f.plant[q]/pmax;
-    // soil = dark warm floor; plant = green overlay (Э-1 gamut: earth then life)
     const r=Math.round(20+35*sv), g=Math.round(16+22*sv), b=Math.round(12+16*sv);
-    gx.fillStyle=`rgb(${r},${g},${b})`;
-    gx.fillRect(cellX(j),cellY(i),C,C);
+    gx.fillStyle=`rgb(${r},${g},${b})`; gx.fillRect(cellX(j),cellY(i),C,C);
     if(pv>0.02){ gx.fillStyle=`rgba(60,${Math.round(120+120*pv)},70,${(0.15+0.6*pv).toFixed(3)})`;
       gx.fillRect(cellX(j),cellY(i),C,C); }
   }
-  // grid lines
   gx.strokeStyle="rgba(120,130,150,.08)"; gx.lineWidth=1;
   for(let i=0;i<=S.gridR;i++){ gx.beginPath();gx.moveTo(S.ox,cellY(i));gx.lineTo(S.ox+C*S.gridC,cellY(i));gx.stroke(); }
   for(let j=0;j<=S.gridC;j++){ gx.beginPath();gx.moveTo(cellX(j),S.oy);gx.lineTo(cellX(j),S.oy+C*S.gridR);gx.stroke(); }
@@ -305,8 +371,7 @@ const GOLDEN=Math.PI*(3-Math.sqrt(5));
 function spiralOffset(k,total){
   if(total<=1) return [0,0];
   const r=(S.cell*0.30)*Math.sqrt(k/Math.max(1,total));
-  const a=k*GOLDEN;
-  return [Math.cos(a)*r, Math.sin(a)*r];
+  const a=k*GOLDEN; return [Math.cos(a)*r, Math.sin(a)*r];
 }
 // Э-2: body radius.
 function bodyRadius(body){
@@ -314,51 +379,49 @@ function bodyRadius(body){
   return Math.max(4, Math.min(26, 4 + k*Math.sqrt(Math.max(0,body)/S.REPRO)));
 }
 
-// ============================ drawing: glyph layer (2,3,4,5,6) ============================
+// ============================ glyph layer (2,3,4,5,6) ============================
 function pawnMap(s){ const m=new Map(); for(const p of s.pawns) m.set(p[0],p); return m; }
 
 function drawGlyphs(){
   mx.clearRect(0,0,cM.width,cM.height);
   const [A,B,fr]=curSnaps();
   const C=S.cell;
+  S._dunbarHidden=0;
 
-  // ---- layer 3: ownership frames ----
+  // ---- layer 3: ownership frames (Э-1-rev2: darker hue, dashed, single low alpha) ----
   if(S.layer.owners){
+    mx.globalAlpha=0.35*la("owners"); mx.lineWidth=1; mx.setLineDash([3,3]);
     for(const [i,j,oid] of B.owners){
-      mx.strokeStyle=houseColor(oid,50); mx.globalAlpha=0.5; mx.lineWidth=2;
-      mx.strokeRect(cellX(j)+2,cellY(i)+2,C-4,C-4);
+      mx.strokeStyle=houseColor(oid,34,55);
+      mx.strokeRect(cellX(j)+2.5,cellY(i)+2.5,C-5,C-5);
     }
-    mx.globalAlpha=1;
+    mx.setLineDash([]); mx.globalAlpha=1;
   }
 
-  // ---- layer 5: Dunbar edges (Э-3) ----
+  // ---- layer 5: Dunbar edges (Э-3-rev2: only ties ≤2 cells; auto-hide >300) ----
   if(S.layer.dunbar){
     const pm=pawnMap(B);
-    let edges=B.known;
-    // Э-3: default OFF at pop>120 handled in checkbox init; here also thin if >600.
-    if(edges.length>600){
-      edges=edges.filter(e=>{ const a=pm.get(e[0]),b=pm.get(e[1]); if(!a||!b)return false;
-        return Math.abs(a[1]-b[1])<=1 && Math.abs(a[2]-b[2])<=1; }); // intra-cluster only
-    }
-    let wmax=1; for(const e of edges) if(e[2]>wmax)wmax=e[2];
-    mx.lineWidth=1;
-    for(const [a,b,w] of edges){
-      const pa=pm.get(a), pb=pm.get(b); if(!pa||!pb)continue;
-      mx.strokeStyle=`rgba(140,170,255,${(0.05+0.45*(w/wmax)).toFixed(3)})`;
-      mx.beginPath(); mx.moveTo(cellCx(pa[2]),cellCy(pa[1])); mx.lineTo(cellCx(pb[2]),cellCy(pb[1])); mx.stroke();
+    const edges=B.known.filter(e=>{ const a=pm.get(e[0]),b=pm.get(e[1]);
+      return a&&b && Math.max(Math.abs(a[1]-b[1]),Math.abs(a[2]-b[2]))<=2; });
+    if(edges.length>300){ S._dunbarHidden=edges.length; }
+    else{
+      let wmax=1; for(const e of edges) if(e[2]>wmax)wmax=e[2];
+      mx.lineWidth=1; const fa=la("dunbar");
+      for(const [a,b,w] of edges){
+        const pa=pm.get(a), pb=pm.get(b);
+        mx.strokeStyle=`rgba(150,180,255,${(( 0.08+0.5*(w/wmax))*fa).toFixed(3)})`;
+        mx.beginPath(); mx.moveTo(cellCx(pa[2]),cellCy(pa[1])); mx.lineTo(cellCx(pb[2]),cellCy(pb[1])); mx.stroke();
+      }
     }
   }
 
-  // ---- layer 4: artifacts (Э-4 corners, size∝mass, glow∝salience) ----
-  if(S.layer.arts){
-    // group by cell to place by kind-corner deterministically
-    for(const ar of B.arts){ drawArtifact(ar); }
-  }
+  // ---- layer 4: artifacts (Э-2-rev2: dimmer, smaller, under bodies) ----
+  if(S.layer.arts){ const fa=la("arts");
+    for(const ar of B.arts){ drawArtifact(ar,fa); } }
 
-  // ---- layer 2: bodies ----
-  if(S.layer.bodies){
+  // ---- layer 2: bodies (drawn AFTER artifacts -> on top) ----
+  if(S.layer.bodies){ const fa=la("bodies");
     const amap=pawnMap(A);
-    // count pawns per cell (on B) for spiral layout
     const perCell=new Map();
     for(const p of B.pawns){ const key=p[1]*1000+p[2]; perCell.set(key,(perCell.get(key)||0)+1); }
     const seen=new Map();
@@ -368,30 +431,26 @@ function drawGlyphs(){
       const [dx,dy]=spiralOffset(k,perCell.get(key));
       let px=cellCx(j)+dx, py=cellCy(i)+dy, r=bodyRadius(body);
       const a=amap.get(oid);
-      if(a){ // Э-6: lerp only adjacent moves, else teleport (jump to B)
-        if(Math.abs(a[1]-i)+Math.abs(a[2]-j)===1){
+      if(a){ if(Math.abs(a[1]-i)+Math.abs(a[2]-j)===1){    // Э-6: lerp only adjacent
           px=cellCx(a[2])+(cellCx(j)-cellCx(a[2]))*fr + dx;
-          py=cellCy(a[1])+(cellCy(i)-cellCy(a[1]))*fr + dy;
-        }
-      } else { r*=0.4+0.6*fr; } // newborn: bloom in over the tick
-      mx.beginPath(); mx.arc(px,py,r,0,7);
-      mx.fillStyle=houseColor(house); mx.fill();
-      mx.lineWidth=2; mx.strokeStyle=PHASE_RING[phase]||"#fff"; mx.globalAlpha=0.85; mx.stroke();
+          py=cellCy(a[1])+(cellCy(i)-cellCy(a[1]))*fr + dy; } }
+      else { r*=0.4+0.6*fr; }                              // newborn bloom
+      mx.globalAlpha=fa;
+      mx.beginPath(); mx.arc(px,py,r,0,7); mx.fillStyle=houseColor(house); mx.fill();
+      mx.lineWidth=2; mx.strokeStyle=PHASE_RING[phase]||"#fff"; mx.globalAlpha=0.85*fa; mx.stroke();
       mx.globalAlpha=1;
       if(S.sel&&S.sel.kind==="pawn"&&S.sel.id===oid){
-        mx.beginPath(); mx.arc(px,py,r+4,0,7); mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.stroke();
-      }
-      p._px=px; p._py=py; p._r=r; // cache for hit-testing
+        mx.beginPath(); mx.arc(px,py,r+4,0,7); mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.stroke(); }
+      p._px=px; p._py=py; p._r=r;
     }
-    // dying pawns: present in A, gone in B -> fade + cross (Э-6, death read)
+    // dying pawns (present in A, gone in B) -> fade + cross
     const bmap=pawnMap(B);
-    const deaths=(S.evByTick.get(B.t)||[]).filter(e=>e.type==="death");
-    const dset=new Set(deaths.map(e=>e.actor));
+    const dset=new Set((S.evByTick.get(B.t)||[]).filter(e=>e.type==="death").map(e=>e.actor));
     for(const p of A.pawns){
       if(bmap.has(p[0])) continue;
-      const [oid,i,j,body,house]=p;
+      const [oid,i,j,body]=p;
       const px=cellCx(j),py=cellCy(i),r=bodyRadius(body)*(1-fr);
-      mx.globalAlpha=(1-fr)*0.8;
+      mx.globalAlpha=(1-fr)*0.8*fa;
       mx.beginPath(); mx.arc(px,py,Math.max(1,r),0,7); mx.fillStyle="#6b7180"; mx.fill();
       if(dset.has(oid)){ mx.strokeStyle=S_BAD; mx.lineWidth=2;
         mx.beginPath();mx.moveTo(px-5,py-5);mx.lineTo(px+5,py+5);mx.moveTo(px+5,py-5);mx.lineTo(px-5,py+5);mx.stroke(); }
@@ -399,91 +458,89 @@ function drawGlyphs(){
     }
   }
 
-  // ---- layer 6: god (Demerzel) ----
-  if(S.layer.god && B.god){ drawGod(B.god,fr); }
+  // ---- layer 6: god ----
+  if(S.layer.god && B.god){ drawGod(B.god,fr,la("god")); }
+
+  // dunbar plaque (DOM)
+  const dp=$("dunbarPlaque");
+  if(S._dunbarHidden){ dp.style.display="block";
+    dp.textContent=`данбар скрыт (${S._dunbarHidden} рёбер) — клавиша 5`; }
+  else dp.style.display="none";
 }
 
-const S_ACCENT="#6cc5ff", S_BAD="#ff5d6c", S_GOOD="#39d98a", S_GOLD="#ffcf5c", S_VIOLET="#b98cff";
-
-function drawArtifact(ar){
+function drawArtifact(ar,fa){
   const [aid,kind,i,j,mass,sal,maker]=ar;
   const C=S.cell;
-  // Э-5: kind corners
   const corner={vessel:[0.28,0.28], store:[0.72,0.28], capital:[0.28,0.72]}[kind]||[0.5,0.5];
   const x=cellX(j)+C*corner[0], y=cellY(i)+C*corner[1];
-  const sz=Math.max(5, Math.min(C*0.42, 5 + S.dbg.glyph*Math.sqrt(Math.max(0,mass)/0.5)));
-  // Э-2: halo ∝ salience^γ (vessel only carries salience; a store/capital is mute -> no glow,
-  // which is exactly the "silent ruin" reading for a decayed vessel: glyph stands, glow gone)
+  // Э-2-rev2: −30% size, capped smaller
+  const sz=Math.max(4, Math.min(C*0.30, (5 + S.dbg.glyph*Math.sqrt(Math.max(0,mass)/0.5))*0.7));
+  // Э-2-rev2: halo on a steeper γ, smaller radius & alpha (a store/capital is mute -> no
+  // glow; a decayed vessel keeps its glyph but loses the glow = "silent ruin")
   if(sal>0.001){
     const g=Math.pow(Math.min(1,sal),S.dbg.gamma);
-    const rad=sz*(1.2+2.2*g);
+    const rad=sz*(1.0+1.4*g);
     const grd=mx.createRadialGradient(x,y,sz*0.4,x,y,rad);
-    grd.addColorStop(0,`rgba(120,200,255,${(0.55*g).toFixed(3)})`);
+    grd.addColorStop(0,`rgba(120,200,255,${(0.32*g*fa).toFixed(3)})`);
     grd.addColorStop(1,"rgba(120,200,255,0)");
     mx.fillStyle=grd; mx.beginPath(); mx.arc(x,y,rad,0,7); mx.fill();
   }
+  mx.globalAlpha=0.8*fa;                       // artifacts never fully opaque (bodies win)
   mx.save(); mx.translate(x,y);
-  if(kind==="vessel") pathStela(sz);
-  else if(kind==="store") pathBarn(sz);
-  else pathGear(sz);
-  mx.restore();
+  if(kind==="vessel") pathStela(mx,sz);
+  else if(kind==="store") pathBarn(mx,sz);
+  else pathGear(mx,sz);
+  mx.restore(); mx.globalAlpha=1;
   if(S.sel&&S.sel.kind==="art"&&S.sel.id===aid){
-    mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.beginPath(); mx.arc(x,y,sz+4,0,7); mx.stroke();
-  }
-  ar._px=x; ar._py=y; ar._r=sz; // hit-test cache
+    mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.beginPath(); mx.arc(x,y,sz+4,0,7); mx.stroke(); }
+  ar._px=x; ar._py=y; ar._r=sz;
 }
-// canvas-path glyphs (deterministic across OS — no emoji)
-function pathStela(s){ // ▮ monument
-  mx.fillStyle="#cfe6ff"; mx.strokeStyle="#5a7fa8"; mx.lineWidth=1;
-  const w=s*0.7,h=s*1.5; mx.beginPath();
-  mx.moveTo(-w/2,h/2); mx.lineTo(-w/2,-h/2+w*0.4); mx.lineTo(0,-h/2); mx.lineTo(w/2,-h/2+w*0.4); mx.lineTo(w/2,h/2); mx.closePath();
-  mx.fill(); mx.stroke();
+// canvas-path glyphs (ctx param so the legend can reuse them 1:1)
+function pathStela(c,s){ // ▮ monument (vessel)
+  c.fillStyle="#cfe6ff"; c.strokeStyle="#5a7fa8"; c.lineWidth=0.8;
+  const w=s*0.7,h=s*1.5; c.beginPath();
+  c.moveTo(-w/2,h/2); c.lineTo(-w/2,-h/2+w*0.4); c.lineTo(0,-h/2); c.lineTo(w/2,-h/2+w*0.4); c.lineTo(w/2,h/2); c.closePath();
+  c.fill(); c.stroke();
 }
-function pathBarn(s){ // ⌂ granary
-  mx.fillStyle="#ffe6a6"; mx.strokeStyle="#b98a3a"; mx.lineWidth=1;
-  const w=s*1.3,h=s*1.0; mx.beginPath();
-  mx.moveTo(-w/2,h/2); mx.lineTo(-w/2,-h*0.1); mx.lineTo(0,-h/2); mx.lineTo(w/2,-h*0.1); mx.lineTo(w/2,h/2); mx.closePath();
-  mx.fill(); mx.stroke();
+function pathBarn(c,s){ // ⌂ granary (store)
+  c.fillStyle="#ffe6a6"; c.strokeStyle="#b98a3a"; c.lineWidth=0.8;
+  const w=s*1.3,h=s*1.0; c.beginPath();
+  c.moveTo(-w/2,h/2); c.lineTo(-w/2,-h*0.1); c.lineTo(0,-h/2); c.lineTo(w/2,-h*0.1); c.lineTo(w/2,h/2); c.closePath();
+  c.fill(); c.stroke();
 }
-function pathGear(s){ // ⚙ tool
-  mx.fillStyle="#bff5d5"; mx.strokeStyle="#3a8a5f"; mx.lineWidth=1;
-  const teeth=8, ro=s*0.9, ri=s*0.6;
-  mx.beginPath();
-  for(let k=0;k<teeth*2;k++){ const rr=k%2?ri:ro; const a=k*Math.PI/teeth; const fn=k?"lineTo":"moveTo";
-    mx[fn](Math.cos(a)*rr,Math.sin(a)*rr); }
-  mx.closePath(); mx.fill(); mx.stroke();
-  mx.beginPath(); mx.arc(0,0,s*0.28,0,7); mx.fillStyle="#0b0d12"; mx.fill();
+function pathGear(c,s){ // ⚙ tool (capital)
+  c.fillStyle="#bff5d5"; c.strokeStyle="#3a8a5f"; c.lineWidth=0.8;
+  const teeth=8, ro=s*0.9, ri=s*0.6; c.beginPath();
+  for(let k=0;k<teeth*2;k++){ const rr=k%2?ri:ro; const a=k*Math.PI/teeth; (k?c.lineTo:c.moveTo).call(c,Math.cos(a)*rr,Math.sin(a)*rr); }
+  c.closePath(); c.fill(); c.stroke();
+  c.beginPath(); c.arc(0,0,s*0.28,0,7); c.fillStyle="#0b0d12"; c.fill();
 }
-function drawGod(god,fr){
+function pathEye(c,s,aura){ // око (Demerzel)
+  c.fillStyle="#1a1030"; c.strokeStyle=aura; c.lineWidth=2;
+  c.beginPath(); c.ellipse(0,0,s,s*0.6,0,0,7); c.fill(); c.stroke();
+  c.beginPath(); c.arc(0,0,s*0.32,0,7); c.fillStyle=aura; c.fill();
+}
+function drawGod(god,fr,fa){
   const C=S.cell;
-  const aura={PROMOTE:S_GOLD, SOW_DISCORD:S_BAD, IMPLANT:S_VIOLET}[god.goal]||S_VIOLET;
-  // Э-5: eye in SE corner of the god's cell
+  const aura=AURA[god.goal]||S_VIOLET;
   const x=cellX(god.j)+C*0.72, y=cellY(god.i)+C*0.72, s=Math.max(6,C*0.22);
-  // whisper wave: expanding ring driven by frac (deterministic, not wall-clock)
   const wr=C*(0.4+2.5*fr);
-  mx.strokeStyle=aura; mx.globalAlpha=(1-fr)*0.5; mx.lineWidth=2;
+  mx.strokeStyle=aura; mx.globalAlpha=(1-fr)*0.5*fa; mx.lineWidth=2;
   mx.beginPath(); mx.arc(cellCx(god.j),cellCy(god.i),wr,0,7); mx.stroke(); mx.globalAlpha=1;
-  // arrows to pushed cells (the agenda anchor)
-  mx.strokeStyle=aura; mx.globalAlpha=0.7; mx.lineWidth=1.5;
+  mx.strokeStyle=aura; mx.globalAlpha=0.7*fa; mx.lineWidth=1.5;
   for(const [pi,pj,cnt] of (god.push||[])){
     mx.beginPath(); mx.moveTo(x,y); mx.lineTo(cellCx(pj),cellCy(pi)); mx.stroke();
-    mx.fillStyle=aura; mx.globalAlpha=0.25;
-    mx.fillRect(cellX(pj)+2,cellY(pi)+2,C-4,C-4); mx.globalAlpha=0.7;
+    mx.fillStyle=aura; mx.globalAlpha=0.22*fa; mx.fillRect(cellX(pj)+2,cellY(pi)+2,C-4,C-4); mx.globalAlpha=0.7*fa;
   }
-  mx.globalAlpha=1;
-  // the eye
-  mx.fillStyle="#1a1030"; mx.strokeStyle=aura; mx.lineWidth=2;
-  mx.beginPath(); mx.ellipse(x,y,s,s*0.6,0,0,7); mx.fill(); mx.stroke();
-  mx.beginPath(); mx.arc(x,y,s*0.32,0,7); mx.fillStyle=aura; mx.fill();
+  mx.globalAlpha=fa; mx.save(); mx.translate(x,y); pathEye(mx,s,aura); mx.restore(); mx.globalAlpha=1;
 }
 
-// ============================ drawing: flash layer (Э-4) ============================
+// ============================ flash layer (Э-4) ============================
 function drawFlashes(){
   fx.clearRect(0,0,cF.width,cF.height);
   const [A,B,fr]=curSnaps();
   const evs=S.evByTick.get(B.t); if(!evs) return;
   const C=S.cell;
-  // Э-4: aggregate by (type,cell); capital_boost always aggregated to one pulse/tick.
   const agg=new Map();
   for(const e of evs){
     if(!e.where)continue;
@@ -491,96 +548,119 @@ function drawFlashes(){
     if(!agg.has(key))agg.set(key,{type:e.type,i:e.where[0],j:e.where[1],n:0,dm:0});
     const g=agg.get(key); g.n++; g.dm+=(e.dm||0);
   }
-  const a=fr; // 0..1 within the tick — bloom then fade
+  const a=fr;
   const puff=(x,y,col,rad,alpha)=>{ fx.globalAlpha=alpha; fx.strokeStyle=col; fx.lineWidth=2;
     fx.beginPath();fx.arc(x,y,rad,0,7);fx.stroke(); fx.globalAlpha=1; };
   for(const g of agg.values()){
     const x=cellCx(g.j), y=cellCy(g.i);
-    const fade=Math.sin(Math.min(1,a)*Math.PI); // 0->1->0 over the tick
+    const fade=Math.sin(Math.min(1,a)*Math.PI);
     switch(g.type){
-      case "artifact_capital_boost": // pulse through the gear into bodies
-        puff(x,y,S_GOOD,C*(0.2+0.5*a),0.6*fade); break;
-      case "artifact_store_draw":    // drop barn->body
+      case "artifact_capital_boost": puff(x,y,S_GOOD,C*(0.2+0.5*a),0.55*fade); break;
+      case "artifact_store_draw":
         fx.globalAlpha=0.8*fade; fx.fillStyle=S_GOLD;
         fx.beginPath(); fx.arc(x,y-C*0.2+C*0.4*a,3,0,7); fx.fill(); fx.globalAlpha=1; break;
-      case "artifact_read":          // spark at the carrier
-        puff(x,y,S_ACCENT,C*0.25*fade,0.9*fade); break;
-      case "artifact_copy":          // arc (origin->copy) — draw a small bright arc
+      case "artifact_read": puff(x,y,S_ACCENT,C*0.25*fade,0.9*fade); break;
+      case "artifact_copy":
         fx.globalAlpha=0.9*fade; fx.strokeStyle=S_ACCENT; fx.lineWidth=2;
         fx.beginPath(); fx.arc(x,y,C*0.3,-1.2,1.2); fx.stroke(); fx.globalAlpha=1; break;
-      case "artifact_write":
-        puff(x,y,"#cfe6ff",C*0.3*fade,0.9*fade); break;
+      case "artifact_write": puff(x,y,"#cfe6ff",C*0.3*fade,0.9*fade); break;
       case "artifact_store": case "artifact_capital":
         puff(x,y,g.type==="artifact_store"?S_GOLD:S_GOOD,C*0.28*fade,0.7*fade); break;
-      case "artifact_ruin":          // dissolve into soil (points)
+      case "artifact_ruin":
         fx.globalAlpha=0.8*(1-a); fx.fillStyle="#8b6b4a";
         for(let k=0;k<6;k++){ const ang=k*GOLDEN; const rr=C*0.3*a;
           fx.fillRect(x+Math.cos(ang)*rr,y+Math.sin(ang)*rr,2,2);} fx.globalAlpha=1; break;
-      case "birth":
-        puff(x,y,houseColor(0,70),C*0.2*a,0.5*(1-a)); break;
-      case "death":
-        // handled as cross on the glyph layer; a faint mark here
-        break;
+      case "birth": puff(x,y,houseColor(0,70),C*0.2*a,0.5*(1-a)); break;
+      case "death": break;
     }
-    // Э-4: count badge when aggregated
-    if(g.n>5){ fx.fillStyle="#fff"; fx.globalAlpha=0.85; fx.font="10px monospace";
-      fx.fillText("×"+g.n, x+6, y-6); fx.globalAlpha=1; }
+    if(g.n>5){ fx.fillStyle="#fff"; fx.globalAlpha=0.85; fx.font="10px monospace"; fx.fillText("×"+g.n, x+6, y-6); fx.globalAlpha=1; }
   }
-  // highlight a clicked chronicle locus
   if(S._locus && S._locus.t===B.t){
     fx.strokeStyle=S_ACCENT; fx.lineWidth=3; fx.globalAlpha=0.7+0.3*Math.sin(a*6);
     fx.strokeRect(cellX(S._locus.j)+1,cellY(S._locus.i)+1,C-2,C-2); fx.globalAlpha=1;
   }
 }
 
+// ============================ legend (WO-leg §2.1) ============================
+function drawLegend(){
+  const cv=$("lgCanvas"); if(!cv) return;
+  const c=cv.getContext("2d"); c.clearRect(0,0,cv.width,cv.height);
+  c.font="12px 'Segoe UI',sans-serif"; c.textBaseline="middle";
+  const rows=[
+    ["pawn",  "кружок = пешка (цвет = дом)"],
+    ["body",  "размер ∝ масса тела"],
+    ["vessel","стела = vessel (знание)"],
+    ["store", "амбар = store (запас)"],
+    ["capital","шестерня = capital (орудие)"],
+    ["halo",  "гало ∝ salience (погасло = руина)"],
+    ["owner", "рамка = владение"],
+    ["eye",   "око = Демерзель (цвет = директива)"],
+    ["stack", "×N = стак событий"],
+  ];
+  let y=14; const lx=16;
+  for(const [k,label] of rows){
+    c.save(); c.translate(lx,y);
+    if(k==="pawn"){ c.beginPath();c.arc(0,0,7,0,7);c.fillStyle=houseColor(3);c.fill();
+      c.lineWidth=2;c.strokeStyle=PHASE_RING.MATURE;c.stroke(); }
+    else if(k==="body"){ c.beginPath();c.arc(-4,0,4,0,7);c.fillStyle=houseColor(3);c.fill();
+      c.beginPath();c.arc(6,0,8,0,7);c.fillStyle=houseColor(3);c.fill(); }
+    else if(k==="vessel") pathStela(c,8);
+    else if(k==="store") pathBarn(c,8);
+    else if(k==="capital") pathGear(c,8);
+    else if(k==="halo"){ const grd=c.createRadialGradient(0,0,2,0,0,11);
+      grd.addColorStop(0,"rgba(120,200,255,.5)");grd.addColorStop(1,"rgba(120,200,255,0)");
+      c.fillStyle=grd;c.beginPath();c.arc(0,0,11,0,7);c.fill(); pathStela(c,7); }
+    else if(k==="owner"){ c.setLineDash([3,3]);c.lineWidth=1;c.globalAlpha=.7;
+      c.strokeStyle=houseColor(3,34,55);c.strokeRect(-8,-8,16,16);c.setLineDash([]);c.globalAlpha=1; }
+    else if(k==="eye"){ pathEye(c,7,S_VIOLET); }
+    else if(k==="stack"){ c.fillStyle="#fff";c.font="11px monospace";c.fillText("×N",-8,0);c.font="12px 'Segoe UI',sans-serif"; }
+    c.restore();
+    c.fillStyle="#c7ccd8"; c.fillText(label, lx+22, y);
+    if(k==="eye"){ // aura swatches
+      c.fillStyle=S_GOLD; c.fillText("PROMOTE",lx+22,y+13);
+      c.fillStyle=S_BAD;  c.fillText("· DISCORD",lx+92,y+13);
+      c.fillStyle=S_VIOLET;c.fillText("· IMPLANT",lx+160,y+13); y+=13;
+    }
+    y+=22;
+  }
+}
+
 // ============================ side panel ============================
 function drawSpark(cv, series, color, opts={}){
-  const ctx=cv.getContext("2d"), W=cv.width, H=cv.height;
-  ctx.clearRect(0,0,W,H);
+  const ctx=cv.getContext("2d"), W=cv.width, H=cv.height; ctx.clearRect(0,0,W,H);
   if(!series.length)return;
   const lo=opts.lo!==undefined?opts.lo:Math.min(...series);
   const hi=opts.hi!==undefined?opts.hi:Math.max(...series,lo+1e-9);
   const n=series.length;
   ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.beginPath();
-  for(let k=0;k<n;k++){ const x=k/(n-1||1)*(W-2)+1; const y=H-2-((series[k]-lo)/(hi-lo||1))*(H-4);
-    k?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  for(let k=0;k<n;k++){ const x=k/(n-1||1)*(W-2)+1; const y=H-2-((series[k]-lo)/(hi-lo||1))*(H-4); k?ctx.lineTo(x,y):ctx.moveTo(x,y); }
   ctx.stroke();
-  // playhead
   const px=S.idx/(S.snaps.length-1||1)*(W-2)+1;
-  ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,H);ctx.stroke();
+  ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=1; ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,H);ctx.stroke();
 }
 let _sparkCache=null;
 function updatePanel(){
-  const [,B]=curSnaps();
-  const m=B.metrics;
+  const [,B]=curSnaps(); const m=B.metrics;
   const inv=Math.abs(m.invariant-S.M0);
-  const el=$("mInv"); el.textContent=inv.toExponential(2);
-  el.className="plaque "+(inv<1e-9?"ok":"bad");
+  const el=$("mInv"); el.textContent=inv.toExponential(2); el.className="plaque "+(inv<1e-9?"ok":"bad");
   $("mSigma").textContent=m.invariant.toFixed(6);
-  $("mPop").textContent=m.pop;
-  $("mGini").textContent=m.gini_body.toFixed(3);
-  $("tickLabel").textContent="t "+B.t;
-  $("chronT").textContent=B.t;
+  $("mPop").textContent=m.pop; $("mGini").textContent=m.gini_body.toFixed(3);
+  $("tickLabel").textContent="t "+B.t; $("chronT").textContent=B.t;
   if(!_sparkCache){
-    _sparkCache={pop:S.snaps.map(s=>s.metrics.pop),
-      gini:S.snaps.map(s=>s.metrics.gini_body),
-      v:S.snaps.map(s=>s.metrics.mass_vessel),
-      st:S.snaps.map(s=>s.metrics.mass_store),
-      cap:S.snaps.map(s=>s.metrics.mass_capital)};
+    _sparkCache={pop:S.snaps.map(s=>s.metrics.pop),gini:S.snaps.map(s=>s.metrics.gini_body),
+      v:S.snaps.map(s=>s.metrics.mass_vessel),st:S.snaps.map(s=>s.metrics.mass_store),cap:S.snaps.map(s=>s.metrics.mass_capital)};
   }
   if(S.layer.metrics){
     drawSpark($("spPop"),_sparkCache.pop,S_ACCENT);
     drawSpark($("spGini"),_sparkCache.gini,S_GOLD,{lo:0,hi:1});
     const mc=$("spMass"), c=mc.getContext("2d"); c.clearRect(0,0,mc.width,mc.height);
     const hi=Math.max(1,...(_sparkCache.v),...(_sparkCache.st),...(_sparkCache.cap));
-    const overlay=(ser,col)=>drawSparkOverlay(mc,ser,col,hi);
-    overlay(_sparkCache.v,S_ACCENT); overlay(_sparkCache.st,S_GOLD); overlay(_sparkCache.cap,S_GOOD);
+    const ov=(ser,col)=>drawSparkOverlay(mc,ser,col,hi);
+    ov(_sparkCache.v,S_ACCENT); ov(_sparkCache.st,S_GOLD); ov(_sparkCache.cap,S_GOOD);
     const px=S.idx/(S.snaps.length-1||1)*(mc.width-2)+1;
     c.strokeStyle="rgba(255,255,255,.35)";c.beginPath();c.moveTo(px,0);c.lineTo(px,mc.height);c.stroke();
   }
-  updateChronicle(B.t);
-  updateInspector();
+  updateChronicle(B.t); updateInspector();
 }
 function drawSparkOverlay(cv,series,color,hi){
   const ctx=cv.getContext("2d"),W=cv.width,H=cv.height,n=series.length;
@@ -595,19 +675,35 @@ function buildChronFilter(){
   [...types].sort().forEach(t=>{const o=document.createElement("option");o.value=t;o.textContent=t;sel.appendChild(o);});
   sel.onchange=()=>{S.chronFilter=sel.value; updateChronicle(displayTick());};
 }
+// WO-leg §2.5: aggregate same-type events into a group row, expandable on click.
 function updateChronicle(t){
-  const wrap=$("chronwrap"); const evs=(S.evByTick.get(t)||[]).filter(e=>S.chronFilter==="*"||e.type===S.chronFilter);
+  const wrap=$("chronwrap");
+  const evs=(S.evByTick.get(t)||[]).filter(e=>S.chronFilter==="*"||e.type===S.chronFilter);
   wrap.innerHTML="";
-  for(const e of evs.slice(0,200)){
-    const d=document.createElement("div"); d.className="ev";
-    const w=e.where?`(${e.where[0]},${e.where[1]})`:"";
-    d.innerHTML=`<span class="k">${e.type}</span> ${e.actor??""} <span class="k">${w}</span>`;
-    d.onclick=()=>{ if(e.where){S._locus={t,i:e.where[0],j:e.where[1]};}
-      if(e.type.startsWith("artifact")&&e.data&&e.data.aid){S.sel={kind:"art",id:e.data.aid};}
-      else if(e.actor!=null){S.sel={kind:"pawn",id:e.actor};} };
-    wrap.appendChild(d);
+  if(!evs.length){ wrap.innerHTML='<div class="k" style="padding:4px 6px">— тихий тик —</div>'; return; }
+  const byType=new Map();
+  for(const e of evs){ if(!byType.has(e.type))byType.set(e.type,[]); byType.get(e.type).push(e); }
+  for(const [type,list] of [...byType.entries()].sort((a,b)=>b[1].length-a[1].length)){
+    if(list.length===1){ wrap.appendChild(evRow(list[0],false,t)); continue; }
+    const sumdm=list.reduce((s,e)=>s+(e.dm||0),0);
+    const grp=document.createElement("div"); grp.className="ev grp";
+    const exp=S.chronExpanded.has(type);
+    const dmtxt=Math.abs(sumdm)>1e-9?` · Σdm ${sumdm>=0?"+":""}${sumdm.toFixed(3)}`:"";
+    grp.innerHTML=`<span class="k">${exp?"▾":"▸"}</span> ${type} <b>×${list.length}</b><span class="k">${dmtxt}</span>`;
+    grp.onclick=()=>{ if(S.chronExpanded.has(type))S.chronExpanded.delete(type); else S.chronExpanded.add(type); updateChronicle(t); };
+    wrap.appendChild(grp);
+    if(exp) for(const e of list.slice(0,120)) wrap.appendChild(evRow(e,true,t));
   }
-  if(!evs.length) wrap.innerHTML='<div class="k" style="padding:4px 6px">— тихий тик —</div>';
+}
+function evRow(e,child,t){
+  const d=document.createElement("div"); d.className="ev"+(child?" child":"");
+  const w=e.where?`(${e.where[0]},${e.where[1]})`:"";
+  d.innerHTML=`<span class="k">${e.type}</span> ${e.actor??""} <span class="k">${w}</span>`;
+  d.onclick=(ev)=>{ ev.stopPropagation();
+    if(e.where){S._locus={t,i:e.where[0],j:e.where[1]};}
+    if(e.type.startsWith("artifact")&&e.data&&e.data.aid){S.sel={kind:"art",id:e.data.aid};}
+    else if(e.actor!=null){S.sel={kind:"pawn",id:e.actor};} };
+  return d;
 }
 function updateInspector(){
   const box=$("inspBody"); if(!S.sel){box.innerHTML='<span class="k">клик по телу или артефакту</span>';return;}
@@ -632,7 +728,8 @@ function updateInspector(){
     const mSer=S.snaps.map(s=>{const q=s.arts.find(x=>x[0]===aid);return q?q[4]:null;}).filter(v=>v!=null);
     const sSer=S.snaps.map(s=>{const q=s.arts.find(x=>x[0]===aid);return q?q[5]:null;}).filter(v=>v!=null);
     const readers=S.events.filter(e=>e.type==="artifact_read"&&e.data&&e.data.aid===aid).length;
-    box.innerHTML=`<div class="mrow"><b>${kind} ${aid}</b><span class="k">maker ${maker}</span></div>
+    const ruin=(kind==="vessel"&&sal<S.readThr)?' <span style="color:var(--bad)">руина</span>':'';
+    box.innerHTML=`<div class="mrow"><b>${kind} ${aid}${ruin}</b><span class="k">maker ${maker}</span></div>
       <div class="k">клетка (${i},${j}) · mass ${mass.toFixed(3)} · salience ${sal.toFixed(3)}</div>
       <div class="k">прочтений: ${readers}</div>
       <div class="tag">mass</div><canvas class="spark" id="imass" width="300" height="28"></canvas>
@@ -641,26 +738,43 @@ function updateInspector(){
   }
 }
 
-// ============================ hit-testing ============================
-cF.addEventListener("click",e=>{
-  const rect=cF.getBoundingClientRect(); const mxp=e.clientX-rect.left, myp=e.clientY-rect.top;
-  const [,B]=curSnaps();
-  let best=null,bd=1e9;
-  if(S.layer.arts) for(const ar of B.arts){ if(ar._px==null)continue; const d=Math.hypot(ar._px-mxp,ar._py-myp);
-    if(d<(ar._r+4)&&d<bd){bd=d;best={kind:"art",id:ar[0]};} }
+// ============================ hit-testing + hover tooltip ============================
+function hitTest(mxp,myp){
+  const [,B]=curSnaps(); let best=null,bd=1e9;
   if(S.layer.bodies) for(const p of B.pawns){ if(p._px==null)continue; const d=Math.hypot(p._px-mxp,p._py-myp);
-    if(d<(p._r+3)&&d<bd){bd=d;best={kind:"pawn",id:p[0]};} }
-  S.sel=best; updateInspector();
+    if(d<(p._r+3)&&d<bd){bd=d;best={kind:"pawn",id:p[0],ref:p};} }
+  if(S.layer.arts) for(const ar of B.arts){ if(ar._px==null)continue; const d=Math.hypot(ar._px-mxp,ar._py-myp);
+    if(d<(ar._r+4)&&d<bd){bd=d;best={kind:"art",id:ar[0],ref:ar};} }
+  return best;
+}
+cF.addEventListener("click",e=>{
+  const rect=cF.getBoundingClientRect(); const h=hitTest(e.clientX-rect.left,e.clientY-rect.top);
+  S.sel=h?{kind:h.kind,id:h.id}:null; updateInspector();
 });
+cF.addEventListener("mousemove",e=>{
+  const rect=cF.getBoundingClientRect(); const h=hitTest(e.clientX-rect.left,e.clientY-rect.top);
+  const tip=$("tip");
+  if(!h){ tip.style.display="none"; return; }
+  let txt;
+  if(h.kind==="pawn"){ const [oid,i,j,body,house,phase]=h.ref; txt=`пешка ${oid} · дом ${house} · ${phase} · body ${body.toFixed(2)}`; }
+  else { const [aid,kind,i,j,mass,sal]=h.ref; const ruin=(kind==="vessel"&&sal<S.readThr)?" (руина)":"";
+    txt=`${kind} #${aid} · mass ${mass.toFixed(2)} · salience ${sal.toFixed(2)}${ruin}`; }
+  tip.textContent=txt; tip.style.display="block";
+  tip.style.left=(e.clientX-rect.left+12)+"px"; tip.style.top=(e.clientY-rect.top+12)+"px";
+});
+cF.addEventListener("mouseleave",()=>{ $("tip").style.display="none"; });
 
 // ============================ playback loop ============================
 function loop(ts){
   const dt=(ts-(S.lastTs||ts))/1000; S.lastTs=ts;
   if(S.playing && S.snaps.length>1){
-    S.frac += dt*S.speed*2.0;          // 2 ticks/sec at 1× (playback pacing only)
+    S.frac += dt*S.speed*2.0;
     while(S.frac>=1){ S.frac-=1; S.idx++; if(S.idx>=S.snaps.length-1){S.idx=S.snaps.length-1;S.frac=0;S.playing=false;setPlayBtn();} }
     $("scrub").value=S.idx;
   }
+  // focus dimming for the whole-canvas layers (glyph sub-layers dim per-section via la())
+  cG.style.opacity = (S.focus===null||S.focus==="ground")?1:0.15;
+  cF.style.opacity = (S.focus===null||S.focus==="bodies"||S.focus==="arts")?1:0.15;
   const t=displayTick();
   if(t!==_lastGroundTick||S._groundDirty){ drawGround(t); _lastGroundTick=t; S._groundDirty=false; }
   drawGlyphs(); drawFlashes(); updatePanel();
@@ -675,31 +789,46 @@ $("btnStepB").onclick=()=>{ S.playing=false;setPlayBtn(); S.idx=Math.max(0,S.idx
 $("speed").onchange=e=>S.speed=parseFloat(e.target.value);
 $("scrub").oninput=e=>{ S.idx=parseInt(e.target.value); S.frac=0; S.playing=false; setPlayBtn(); };
 $("btnPng").onclick=()=>{
-  // compose the three layers into one bitmap
   const out=document.createElement("canvas"); out.width=cG.width; out.height=cG.height;
   const o=out.getContext("2d"); o.fillStyle="#06070a"; o.fillRect(0,0,out.width,out.height);
   o.drawImage(cG,0,0); o.drawImage(cM,0,0); o.drawImage(cF,0,0);
   out.toBlob(b=>{ const u=URL.createObjectURL(b); const a=document.createElement("a");
     a.href=u; a.download=`glass_t${displayTick()}.png`; a.click(); URL.revokeObjectURL(u); });
 };
-// layer checkboxes (Э-3: dunbar OFF by default when pop is likely > 120 — decided at boot)
+function toggleLegend(){ $("legend").classList.toggle("hide"); }
+$("btnLegend").onclick=toggleLegend; $("lgClose").onclick=toggleLegend;
+function closeOnboard(){ $("onboard").classList.add("hide"); }
+$("onboard").onclick=closeOnboard;
+
+// layer checkboxes
 const layerRow=$("layerRow");
 LAYERS.forEach(l=>{
-  const lab=document.createElement("label");
+  const lab=document.createElement("label"); lab.dataset.key=l.key;
   const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=true;
   cb.onchange=()=>{ S.layer[l.key]=cb.checked; S._groundDirty=true; };
-  lab.appendChild(cb); lab.appendChild(document.createTextNode(l.n));
-  lab.dataset.key=l.key; layerRow.appendChild(lab);
+  lab.appendChild(cb); lab.appendChild(document.createTextNode(l.n)); layerRow.appendChild(lab);
 });
+function syncLayerBoxes(){ LAYERS.forEach(l=>{ const cb=layerRow.querySelector(`label[data-key="${l.key}"] input`); if(cb)cb.checked=S.layer[l.key]; }); }
+
 // hotkeys
 window.addEventListener("keydown",e=>{
-  if(e.key===" "){e.preventDefault();$("btnPlay").click();}
-  else if(e.key==="ArrowRight")$("btnStepF").click();
-  else if(e.key==="ArrowLeft")$("btnStepB").click();
-  else if(e.key>="1"&&e.key<="7"){ const l=LAYERS[+e.key-1]; if(l){ S.layer[l.key]=!S.layer[l.key];
-    const cb=layerRow.querySelector(`label[data-key="${l.key}"] input`); if(cb)cb.checked=S.layer[l.key]; S._groundDirty=true; } }
+  if(e.key==="Escape"){ closeOnboard(); return; }
+  if(e.key==="?"){ $("onboard").classList.toggle("hide"); return; }
+  if(e.key==="l"||e.key==="L"){ toggleLegend(); return; }
+  if(e.key===" "){e.preventDefault();$("btnPlay").click();return;}
+  if(e.key==="ArrowRight"){$("btnStepF").click();return;}
+  if(e.key==="ArrowLeft"){$("btnStepB").click();return;}
+  if(e.key>="1"&&e.key<="7"){
+    const l=LAYERS[+e.key-1]; if(!l)return;
+    if(e.shiftKey){ // WO-leg §2.8: focus one layer, dim the rest; repeat = restore
+      S.focus=(S.focus===l.key)?null:l.key;
+    } else {
+      S.layer[l.key]=!S.layer[l.key]; S._groundDirty=true;
+      const cb=layerRow.querySelector(`label[data-key="${l.key}"] input`); if(cb)cb.checked=S.layer[l.key];
+    }
+  }
 });
-// debug panel (?debug=1) — Э-2 knobs
+// debug panel (?debug=1) — Э-2-rev2 knobs
 if(new URLSearchParams(location.search).get("debug")==="1"){
   $("debug").classList.add("show");
   $("dScale").oninput=e=>S.dbg.scale=+e.target.value;
@@ -708,7 +837,7 @@ if(new URLSearchParams(location.search).get("debug")==="1"){
 }
 
 // ============================ go ============================
-tryFetch(); // if it fails (file://), the drop overlay stays up
+tryFetch();
 </script>
 </body>
 </html>
