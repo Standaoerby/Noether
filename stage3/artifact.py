@@ -110,7 +110,7 @@ class ArtifactField:
                  read_threshold: float = 0.5, salience0: float = 1.0,
                  store_on: bool = False, store_stake: float = 0.30,
                  store_draw_at: float = 0.40, store_draw_rate: float = 0.10,
-                 store_access: str = "open",
+                 store_access: str = "open", store_settle: bool = False,
                  capital_on: bool = False, capital_stake: float = 0.50,
                  capital_rate: float = 0.02, capital_access: str = "open"):
         self.on = bool(enabled)
@@ -130,6 +130,11 @@ class ArtifactField:
         self.store_draw_at = float(store_draw_at)  # hunger line: body below this may draw
         self.store_draw_rate = float(store_draw_rate)  # kg per tick a drawer may extract
         self.store_access = str(store_access)      # open | owner | maker
+        # vitok 3 (v2): grain is put away for a day — a store minted THIS tick is not
+        # drawable until the next (born_t < t). A physical settling pause, not a new force:
+        # it moves no mass, it only DELAYS the transfer one tick, letting the object stand
+        # long enough to be seen/navigated to. OFF => the draw path is byte-identical.
+        self.store_settle = bool(store_settle)
         self.capital_on = bool(capital_on)
         self.capital_stake = float(capital_stake)  # kg of body frozen into a tool
         self.capital_rate = float(capital_rate)    # soil→body per tick per kg of tool
@@ -417,6 +422,10 @@ class ArtifactField:
         bycell = {}
         for art in self.artifacts:
             if art.kind == "store" and art.mass > 0.0:
+                # vitok 3 (v2): a just-minted store settles for a tick before it can be
+                # drawn (born_t < t). OFF => no filter => byte-identical draw path.
+                if self.store_settle and art.born_t >= t:
+                    continue
                 bycell.setdefault((art.i, art.j), []).append(art)
         if not bycell:
             return
