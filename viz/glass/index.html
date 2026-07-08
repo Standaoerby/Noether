@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<!--
+  «Стеклянный полис» — Glass Polis renderer (WO_glass-polis.md §4/§5).
+
+  ONE self-contained file: vanilla JS + <canvas>, ZERO external deps, ZERO CDN, ZERO build.
+  Opens by double-click offline (drag the three data files onto the window) OR over a local
+  server (py -m http.server, then it fetch()es ./data/). It is a READER of the exporter's
+  package — one log -> one film, deterministically: every drawn frame is a pure function of
+  (snapshot index, sub-tick fraction). Wall-clock time drives ONLY playback advance and the
+  bloom/fade of event flashes — never the state geometry. No Math.random() anywhere.
+
+  HEURISTICS (Э-N — tasteful calls, candidates for revision; each marked `// Э-N:` in code):
+    Э-1  house palette: hue = (house_id * 137.508) % 360 (golden angle), fixed s/l.
+    Э-2  scales: body radius r = clamp(4 + 10*sqrt(body/REPRO), 4, 26)px; salience glow on a
+         γ≈0.6 curve so fading reads in the loud zone. Knobs live in the ?debug=1 panel.
+    Э-3  Dunbar edges: exporter caps top-8 known per pawn; if a frame has > 600 edges we draw
+         only intra-cluster (cell + 8 neighbours) ones. Layer defaults OFF when pop > 120.
+    Э-4  event density: > 5 of one type on a cell aggregate into one glyph with a count
+         ("×23"); artifact_capital_boost is ALWAYS aggregated to one pulse/tick (summed dm).
+    Э-5  collisions: pawns sharing a cell fan out on a Fibonacci spiral (deterministic by
+         oid); artifacts sit in cell corners by kind (vessel NW, store NE, capital SW), the
+         Demerzel eye SE.
+    Э-6  interpolation: a pawn position is lerped ONLY when |Δi|+|Δj| == 1 between snapshots;
+         a longer jump teleports (birth/death oid-reuse must not read as a glide). Soil/plant
+         fields (stored every 10 ticks) are linearly interpolated by tick.
+    Э-7  three canvas layers (ground / stable glyphs / flashes); ground redraws only on tick
+         change; requestAnimationFrame; no heavy blur on hundreds of objects.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Стеклянный полис — Glass Polis</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#12151d; --panel2:#171b25; --ink:#e6e9f0; --dim:#8b93a7;
+    --line:#2a3040; --accent:#6cc5ff; --good:#39d98a; --bad:#ff5d6c; --gold:#ffcf5c;
+    --violet:#b98cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font:13px/1.4 "Segoe UI",system-ui,sans-serif;overflow:hidden}
+  #app{display:grid;grid-template-columns:1fr 340px;grid-template-rows:1fr auto;height:100vh}
+  #stage{position:relative;grid-row:1;grid-column:1;overflow:hidden;background:#06070a}
+  #stage canvas{position:absolute;top:0;left:0}
+  #side{grid-row:1/3;grid-column:2;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden}
+  #controls{grid-row:2;grid-column:1;background:var(--panel);border-top:1px solid var(--line);
+    padding:8px 12px;display:flex;flex-direction:column;gap:6px}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  button,select{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:6px;padding:5px 9px;cursor:pointer;font:inherit}
+  button:hover{border-color:var(--accent)}
+  button.on{border-color:var(--accent);color:var(--accent)}
+  .layers label{display:inline-flex;align-items:center;gap:4px;margin-right:6px;
+    padding:3px 6px;border:1px solid var(--line);border-radius:6px;cursor:pointer;user-select:none}
+  .layers input{accent-color:var(--accent)}
+  #scrub{flex:1;min-width:120px}
+  input[type=range]{accent-color:var(--accent)}
+  .sec{padding:10px 12px;border-bottom:1px solid var(--line)}
+  .sec h3{margin:0 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  #chronwrap{flex:1;overflow:auto}
+  .ev{padding:2px 6px;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .ev:hover{background:var(--panel2)}
+  .k{color:var(--dim)}
+  .plaque{display:inline-block;padding:2px 8px;border-radius:5px;font-weight:600}
+  .plaque.ok{background:rgba(57,217,138,.15);color:var(--good);border:1px solid var(--good)}
+  .plaque.bad{background:rgba(255,93,108,.15);color:var(--bad);border:1px solid var(--bad)}
+  .mrow{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:2px 0}
+  .mrow b{font-variant-numeric:tabular-nums}
+  canvas.spark{background:var(--panel2);border-radius:4px;display:block;margin-top:2px}
+  #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:10px;background:rgba(6,7,10,.94);z-index:20;text-align:center;padding:24px}
+  #drop.hide{display:none}
+  #drop .big{font-size:18px;color:var(--accent)}
+  #drop code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--ink)}
+  #debug{position:absolute;top:8px;left:8px;background:rgba(18,21,29,.92);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;z-index:15;display:none}
+  #debug.show{display:block}
+  #debug label{display:block;margin:3px 0;color:var(--dim)}
+  #hint{position:absolute;bottom:8px;left:8px;color:var(--dim);font-size:11px;z-index:5;
+    background:rgba(6,7,10,.5);padding:3px 7px;border-radius:5px}
+  .tag{font-size:10px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="cGround"></canvas>
+    <canvas id="cGlyph"></canvas>
+    <canvas id="cFlash"></canvas>
+    <div id="debug">
+      <b>debug (Э-2)</b>
+      <label>body γ-scale <input id="dScale" type="range" min="4" max="20" value="10"></label>
+      <label>salience γ <input id="dGamma" type="range" min="20" max="120" value="60"></label>
+      <label>glyph×mass <input id="dGlyph" type="range" min="10" max="40" value="22"></label>
+    </div>
+    <div id="hint">space play/pause · ←/→ шаг · 1–7 слои · клик по телу/артефакту — инспектор</div>
+    <div id="drop">
+      <div class="big">Стеклянный полис</div>
+      <div>Перетащи сюда <code>meta.json</code>, <code>snapshots.jsonl</code>, <code>events.jsonl</code></div>
+      <div class="tag">или запусти <code>py -m http.server</code> в папке viz/glass и открой через http://localhost:8000/</div>
+      <div class="tag" id="dropErr"></div>
+    </div>
+  </div>
+
+  <div id="side">
+    <div class="sec">
+      <h3>Инвариант — персонаж</h3>
+      <div class="mrow"><span>|Σ − M0|</span><span id="mInv" class="plaque ok">—</span></div>
+      <div class="mrow k"><span>Σ</span><b id="mSigma">—</b></div>
+      <div class="mrow k"><span>M0</span><b id="mM0">—</b></div>
+    </div>
+    <div class="sec">
+      <h3>Метрики</h3>
+      <div class="mrow"><span>популяция</span><b id="mPop">—</b></div>
+      <canvas class="spark" id="spPop" width="300" height="34"></canvas>
+      <div class="mrow"><span>Gini(body)</span><b id="mGini">—</b></div>
+      <canvas class="spark" id="spGini" width="300" height="34"></canvas>
+      <div class="mrow"><span>масса: <span style="color:var(--accent)">vessel</span> / <span style="color:var(--gold)">store</span> / <span style="color:var(--good)">capital</span></span></div>
+      <canvas class="spark" id="spMass" width="300" height="40"></canvas>
+    </div>
+    <div class="sec" id="inspector">
+      <h3>Инспектор</h3>
+      <div id="inspBody" class="k">клик по телу или артефакту</div>
+    </div>
+    <div class="sec" style="display:flex;flex-direction:column;flex:1;min-height:120px;overflow:hidden">
+      <h3>Хроника тика <span id="chronT"></span>
+        <select id="chronFilter" style="float:right;font-size:11px;padding:2px 4px"></select>
+      </h3>
+      <div id="chronwrap"></div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div class="row">
+      <button id="btnPlay">▶ play</button>
+      <button id="btnStepB">⟨ шаг</button>
+      <button id="btnStepF">шаг ⟩</button>
+      <span class="k">скорость</span>
+      <select id="speed">
+        <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+        <option value="2">2×</option><option value="4">4×</option>
+        <option value="8">8×</option><option value="16">16×</option>
+      </select>
+      <span class="k" id="tickLabel" style="margin-left:auto">t —</span>
+      <button id="btnPng">кадр в PNG</button>
+    </div>
+    <div class="row">
+      <input id="scrub" type="range" min="0" max="0" value="0" step="1"/>
+    </div>
+    <div class="row layers" id="layerRow"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ============================ state ============================
+const LAYERS = [
+  {key:"ground",  n:"1 земля"},   {key:"bodies",  n:"2 тела"},
+  {key:"owners",  n:"3 собственность"}, {key:"arts", n:"4 артефакты"},
+  {key:"dunbar",  n:"5 данбар"},  {key:"god",     n:"6 голос бога"},
+  {key:"metrics", n:"7 метрики"},
+];
+const S = {
+  meta:null, snaps:[], events:[], evByTick:new Map(), snapByT:new Map(),
+  fieldFrames:[],            // snapshot indices carrying soil/plant
+  idx:0, frac:0, playing:false, speed:1, lastTs:0,
+  layer:{}, sel:null,        // sel = {kind:'pawn'|'art', id}
+  chronFilter:"*", REPRO:0.92, gridR:14, gridC:14, M0:0,
+  cell:32, ox:0, oy:0,       // layout: cell px + grid origin
+  dbg:{scale:10, gamma:0.60, glyph:22},
+};
+LAYERS.forEach(l=>S.layer[l.key]=true);
+
+const $=id=>document.getElementById(id);
+const cG=$("cGround"), cM=$("cGlyph"), cF=$("cFlash");
+const gx=cG.getContext("2d"), mx=cM.getContext("2d"), fx=cF.getContext("2d");
+
+// ============================ loading ============================
+async function tryFetch(){
+  try{
+    const meta = await (await fetch("./data/meta.json",{cache:"no-store"})).json();
+    const snapT = await (await fetch("./data/snapshots.jsonl",{cache:"no-store"})).text();
+    const evT   = await (await fetch("./data/events.jsonl",{cache:"no-store"})).text();
+    boot(meta, parseJsonl(snapT), parseJsonl(evT));
+    return true;
+  }catch(e){ return false; }
+}
+function parseJsonl(t){
+  const out=[]; let s=0;
+  for(let i=0;i<t.length;i++){ if(t[i]==="\n"){ const ln=t.slice(s,i).trim(); if(ln)out.push(JSON.parse(ln)); s=i+1; } }
+  const tail=t.slice(s).trim(); if(tail)out.push(JSON.parse(tail));
+  return out;
+}
+// drag & drop (file:// path — fetch is blocked there)
+const drop=$("drop");
+["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();}));
+window.addEventListener("drop",async e=>{
+  e.preventDefault();
+  const files={}; for(const f of e.dataTransfer.files) files[f.name]=f;
+  try{
+    const need=["meta.json","snapshots.jsonl","events.jsonl"];
+    for(const n of need) if(!files[n]) throw new Error("нет файла "+n);
+    const meta=JSON.parse(await files["meta.json"].text());
+    const snaps=parseJsonl(await files["snapshots.jsonl"].text());
+    const events=parseJsonl(await files["events.jsonl"].text());
+    boot(meta,snaps,events);
+  }catch(err){ $("dropErr").textContent="ошибка: "+err.message; }
+});
+
+function boot(meta,snaps,events){
+  S.meta=meta; S.snaps=snaps; S.events=events;
+  S.gridR=meta.grid_rows; S.gridC=meta.grid_cols; S.M0=meta.M0;
+  if(meta.cfg && meta.cfg.REPRO) S.REPRO=meta.cfg.REPRO;
+  // indexes
+  S.evByTick=new Map();
+  for(const e of events){ if(!S.evByTick.has(e.t))S.evByTick.set(e.t,[]); S.evByTick.get(e.t).push(e); }
+  S.snapByT=new Map(); S.fieldFrames=[];
+  snaps.forEach((s,i)=>{ S.snapByT.set(s.t,i); if(s.soil)S.fieldFrames.push(i); });
+  buildChronFilter();
+  // Э-3: the Dunbar layer defaults OFF when the film ever exceeds ~120 pawns (edges become
+  // an unreadable hairball); the user can still switch it on with checkbox 5.
+  const maxPop=Math.max(0,...snaps.map(s=>s.metrics.pop));
+  if(maxPop>120){ S.layer.dunbar=false;
+    const cb=layerRow.querySelector('label[data-key="dunbar"] input'); if(cb)cb.checked=false; }
+  drop.classList.add("hide");
+  S.idx=0; S.frac=0;
+  $("scrub").max=Math.max(0,snaps.length-1);
+  resize(); requestAnimationFrame(loop);
+  $("mM0").textContent=S.M0;
+}
+
+// ============================ layout ============================
+function resize(){
+  const st=$("stage"); const w=st.clientWidth, h=st.clientHeight;
+  for(const c of [cG,cM,cF]){ c.width=w; c.height=h; }
+  S.cell=Math.max(8, Math.floor(Math.min(w/S.gridC, h/S.gridR)));
+  S.ox=Math.floor((w - S.cell*S.gridC)/2);
+  S.oy=Math.floor((h - S.cell*S.gridR)/2);
+  S._groundDirty=true;
+}
+window.addEventListener("resize",resize);
+// cell(i,j) -> pixel top-left. NOTE: i indexes rows (y), j indexes cols (x).
+const cellX=j=>S.ox + j*S.cell, cellY=i=>S.oy + i*S.cell;
+const cellCx=j=>cellX(j)+S.cell/2, cellCy=i=>cellY(i)+S.cell/2;
+
+// ============================ palette ============================
+// Э-1: deterministic house palette from the golden angle.
+function houseColor(h, l=58, s=68){
+  const hue=((h*137.508)%360+360)%360;
+  return `hsl(${hue.toFixed(1)} ${s}% ${l}%)`;
+}
+const PHASE_RING={INFANT:"#7fd0ff", MATURE:"#e6e9f0", ELDER:"#9aa0b3"};
+
+// ============================ interpolation helpers ============================
+function curSnaps(){ // (A,B,frac) — B is the tick being entered
+  const A=S.snaps[S.idx];
+  const B=S.snaps[Math.min(S.idx+1,S.snaps.length-1)];
+  return [A,B,S.idx+1<=S.snaps.length-1?S.frac:0];
+}
+function displayTick(){ const [,B]=curSnaps(); return B.t; }
+
+// Э-6: linear field interpolation between the every-10 soil/plant frames.
+function fieldAt(tick){
+  const ff=S.fieldFrames; if(!ff.length) return null;
+  let lo=ff[0], hi=ff[ff.length-1];
+  for(let k=0;k<ff.length;k++){ if(S.snaps[ff[k]].t<=tick) lo=ff[k]; if(S.snaps[ff[k]].t>=tick){ hi=ff[k]; break; } }
+  const sl=S.snaps[lo], sh=S.snaps[hi];
+  if(lo===hi) return {soil:sl.soil, plant:sl.plant};
+  const a=(tick-sl.t)/(sh.t-sl.t);
+  const n=sl.soil.length, soil=new Array(n), plant=new Array(n);
+  for(let q=0;q<n;q++){ soil[q]=sl.soil[q]+(sh.soil[q]-sl.soil[q])*a; plant[q]=sl.plant[q]+(sh.plant[q]-sl.plant[q])*a; }
+  return {soil,plant};
+}
+
+// ============================ drawing: ground (layer 1) ============================
+let _lastGroundTick=-1;
+function drawGround(tick){
+  gx.clearRect(0,0,cG.width,cG.height);
+  if(!S.layer.ground){ return; }
+  const f=fieldAt(tick); if(!f) return;
+  let smax=1,pmax=1;
+  for(let q=0;q<f.soil.length;q++){ if(f.soil[q]>smax)smax=f.soil[q]; if(f.plant[q]>pmax)pmax=f.plant[q]; }
+  const C=S.cell;
+  for(let i=0;i<S.gridR;i++) for(let j=0;j<S.gridC;j++){
+    const q=i*S.gridC+j;
+    const sv=f.soil[q]/smax, pv=f.plant[q]/pmax;
+    // soil = dark warm floor; plant = green overlay (Э-1 gamut: earth then life)
+    const r=Math.round(20+35*sv), g=Math.round(16+22*sv), b=Math.round(12+16*sv);
+    gx.fillStyle=`rgb(${r},${g},${b})`;
+    gx.fillRect(cellX(j),cellY(i),C,C);
+    if(pv>0.02){ gx.fillStyle=`rgba(60,${Math.round(120+120*pv)},70,${(0.15+0.6*pv).toFixed(3)})`;
+      gx.fillRect(cellX(j),cellY(i),C,C); }
+  }
+  // grid lines
+  gx.strokeStyle="rgba(120,130,150,.08)"; gx.lineWidth=1;
+  for(let i=0;i<=S.gridR;i++){ gx.beginPath();gx.moveTo(S.ox,cellY(i));gx.lineTo(S.ox+C*S.gridC,cellY(i));gx.stroke(); }
+  for(let j=0;j<=S.gridC;j++){ gx.beginPath();gx.moveTo(cellX(j),S.oy);gx.lineTo(cellX(j),S.oy+C*S.gridR);gx.stroke(); }
+}
+
+// Э-5: Fibonacci-spiral offset for the k-th pawn on a cell (deterministic).
+const GOLDEN=Math.PI*(3-Math.sqrt(5));
+function spiralOffset(k,total){
+  if(total<=1) return [0,0];
+  const r=(S.cell*0.30)*Math.sqrt(k/Math.max(1,total));
+  const a=k*GOLDEN;
+  return [Math.cos(a)*r, Math.sin(a)*r];
+}
+// Э-2: body radius.
+function bodyRadius(body){
+  const k=S.dbg.scale;
+  return Math.max(4, Math.min(26, 4 + k*Math.sqrt(Math.max(0,body)/S.REPRO)));
+}
+
+// ============================ drawing: glyph layer (2,3,4,5,6) ============================
+function pawnMap(s){ const m=new Map(); for(const p of s.pawns) m.set(p[0],p); return m; }
+
+function drawGlyphs(){
+  mx.clearRect(0,0,cM.width,cM.height);
+  const [A,B,fr]=curSnaps();
+  const C=S.cell;
+
+  // ---- layer 3: ownership frames ----
+  if(S.layer.owners){
+    for(const [i,j,oid] of B.owners){
+      mx.strokeStyle=houseColor(oid,50); mx.globalAlpha=0.5; mx.lineWidth=2;
+      mx.strokeRect(cellX(j)+2,cellY(i)+2,C-4,C-4);
+    }
+    mx.globalAlpha=1;
+  }
+
+  // ---- layer 5: Dunbar edges (Э-3) ----
+  if(S.layer.dunbar){
+    const pm=pawnMap(B);
+    let edges=B.known;
+    // Э-3: default OFF at pop>120 handled in checkbox init; here also thin if >600.
+    if(edges.length>600){
+      edges=edges.filter(e=>{ const a=pm.get(e[0]),b=pm.get(e[1]); if(!a||!b)return false;
+        return Math.abs(a[1]-b[1])<=1 && Math.abs(a[2]-b[2])<=1; }); // intra-cluster only
+    }
+    let wmax=1; for(const e of edges) if(e[2]>wmax)wmax=e[2];
+    mx.lineWidth=1;
+    for(const [a,b,w] of edges){
+      const pa=pm.get(a), pb=pm.get(b); if(!pa||!pb)continue;
+      mx.strokeStyle=`rgba(140,170,255,${(0.05+0.45*(w/wmax)).toFixed(3)})`;
+      mx.beginPath(); mx.moveTo(cellCx(pa[2]),cellCy(pa[1])); mx.lineTo(cellCx(pb[2]),cellCy(pb[1])); mx.stroke();
+    }
+  }
+
+  // ---- layer 4: artifacts (Э-4 corners, size∝mass, glow∝salience) ----
+  if(S.layer.arts){
+    // group by cell to place by kind-corner deterministically
+    for(const ar of B.arts){ drawArtifact(ar); }
+  }
+
+  // ---- layer 2: bodies ----
+  if(S.layer.bodies){
+    const amap=pawnMap(A);
+    // count pawns per cell (on B) for spiral layout
+    const perCell=new Map();
+    for(const p of B.pawns){ const key=p[1]*1000+p[2]; perCell.set(key,(perCell.get(key)||0)+1); }
+    const seen=new Map();
+    for(const p of B.pawns){
+      const [oid,i,j,body,house,phase]=p;
+      const key=i*1000+j; const k=seen.get(key)||0; seen.set(key,k+1);
+      const [dx,dy]=spiralOffset(k,perCell.get(key));
+      let px=cellCx(j)+dx, py=cellCy(i)+dy, r=bodyRadius(body);
+      const a=amap.get(oid);
+      if(a){ // Э-6: lerp only adjacent moves, else teleport (jump to B)
+        if(Math.abs(a[1]-i)+Math.abs(a[2]-j)===1){
+          px=cellCx(a[2])+(cellCx(j)-cellCx(a[2]))*fr + dx;
+          py=cellCy(a[1])+(cellCy(i)-cellCy(a[1]))*fr + dy;
+        }
+      } else { r*=0.4+0.6*fr; } // newborn: bloom in over the tick
+      mx.beginPath(); mx.arc(px,py,r,0,7);
+      mx.fillStyle=houseColor(house); mx.fill();
+      mx.lineWidth=2; mx.strokeStyle=PHASE_RING[phase]||"#fff"; mx.globalAlpha=0.85; mx.stroke();
+      mx.globalAlpha=1;
+      if(S.sel&&S.sel.kind==="pawn"&&S.sel.id===oid){
+        mx.beginPath(); mx.arc(px,py,r+4,0,7); mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.stroke();
+      }
+      p._px=px; p._py=py; p._r=r; // cache for hit-testing
+    }
+    // dying pawns: present in A, gone in B -> fade + cross (Э-6, death read)
+    const bmap=pawnMap(B);
+    const deaths=(S.evByTick.get(B.t)||[]).filter(e=>e.type==="death");
+    const dset=new Set(deaths.map(e=>e.actor));
+    for(const p of A.pawns){
+      if(bmap.has(p[0])) continue;
+      const [oid,i,j,body,house]=p;
+      const px=cellCx(j),py=cellCy(i),r=bodyRadius(body)*(1-fr);
+      mx.globalAlpha=(1-fr)*0.8;
+      mx.beginPath(); mx.arc(px,py,Math.max(1,r),0,7); mx.fillStyle="#6b7180"; mx.fill();
+      if(dset.has(oid)){ mx.strokeStyle=S_BAD; mx.lineWidth=2;
+        mx.beginPath();mx.moveTo(px-5,py-5);mx.lineTo(px+5,py+5);mx.moveTo(px+5,py-5);mx.lineTo(px-5,py+5);mx.stroke(); }
+      mx.globalAlpha=1;
+    }
+  }
+
+  // ---- layer 6: god (Demerzel) ----
+  if(S.layer.god && B.god){ drawGod(B.god,fr); }
+}
+
+const S_ACCENT="#6cc5ff", S_BAD="#ff5d6c", S_GOOD="#39d98a", S_GOLD="#ffcf5c", S_VIOLET="#b98cff";
+
+function drawArtifact(ar){
+  const [aid,kind,i,j,mass,sal,maker]=ar;
+  const C=S.cell;
+  // Э-5: kind corners
+  const corner={vessel:[0.28,0.28], store:[0.72,0.28], capital:[0.28,0.72]}[kind]||[0.5,0.5];
+  const x=cellX(j)+C*corner[0], y=cellY(i)+C*corner[1];
+  const sz=Math.max(5, Math.min(C*0.42, 5 + S.dbg.glyph*Math.sqrt(Math.max(0,mass)/0.5)));
+  // Э-2: halo ∝ salience^γ (vessel only carries salience; a store/capital is mute -> no glow,
+  // which is exactly the "silent ruin" reading for a decayed vessel: glyph stands, glow gone)
+  if(sal>0.001){
+    const g=Math.pow(Math.min(1,sal),S.dbg.gamma);
+    const rad=sz*(1.2+2.2*g);
+    const grd=mx.createRadialGradient(x,y,sz*0.4,x,y,rad);
+    grd.addColorStop(0,`rgba(120,200,255,${(0.55*g).toFixed(3)})`);
+    grd.addColorStop(1,"rgba(120,200,255,0)");
+    mx.fillStyle=grd; mx.beginPath(); mx.arc(x,y,rad,0,7); mx.fill();
+  }
+  mx.save(); mx.translate(x,y);
+  if(kind==="vessel") pathStela(sz);
+  else if(kind==="store") pathBarn(sz);
+  else pathGear(sz);
+  mx.restore();
+  if(S.sel&&S.sel.kind==="art"&&S.sel.id===aid){
+    mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.beginPath(); mx.arc(x,y,sz+4,0,7); mx.stroke();
+  }
+  ar._px=x; ar._py=y; ar._r=sz; // hit-test cache
+}
+// canvas-path glyphs (deterministic across OS — no emoji)
+function pathStela(s){ // ▮ monument
+  mx.fillStyle="#cfe6ff"; mx.strokeStyle="#5a7fa8"; mx.lineWidth=1;
+  const w=s*0.7,h=s*1.5; mx.beginPath();
+  mx.moveTo(-w/2,h/2); mx.lineTo(-w/2,-h/2+w*0.4); mx.lineTo(0,-h/2); mx.lineTo(w/2,-h/2+w*0.4); mx.lineTo(w/2,h/2); mx.closePath();
+  mx.fill(); mx.stroke();
+}
+function pathBarn(s){ // ⌂ granary
+  mx.fillStyle="#ffe6a6"; mx.strokeStyle="#b98a3a"; mx.lineWidth=1;
+  const w=s*1.3,h=s*1.0; mx.beginPath();
+  mx.moveTo(-w/2,h/2); mx.lineTo(-w/2,-h*0.1); mx.lineTo(0,-h/2); mx.lineTo(w/2,-h*0.1); mx.lineTo(w/2,h/2); mx.closePath();
+  mx.fill(); mx.stroke();
+}
+function pathGear(s){ // ⚙ tool
+  mx.fillStyle="#bff5d5"; mx.strokeStyle="#3a8a5f"; mx.lineWidth=1;
+  const teeth=8, ro=s*0.9, ri=s*0.6;
+  mx.beginPath();
+  for(let k=0;k<teeth*2;k++){ const rr=k%2?ri:ro; const a=k*Math.PI/teeth; const fn=k?"lineTo":"moveTo";
+    mx[fn](Math.cos(a)*rr,Math.sin(a)*rr); }
+  mx.closePath(); mx.fill(); mx.stroke();
+  mx.beginPath(); mx.arc(0,0,s*0.28,0,7); mx.fillStyle="#0b0d12"; mx.fill();
+}
+function drawGod(god,fr){
+  const C=S.cell;
+  const aura={PROMOTE:S_GOLD, SOW_DISCORD:S_BAD, IMPLANT:S_VIOLET}[god.goal]||S_VIOLET;
+  // Э-5: eye in SE corner of the god's cell
+  const x=cellX(god.j)+C*0.72, y=cellY(god.i)+C*0.72, s=Math.max(6,C*0.22);
+  // whisper wave: expanding ring driven by frac (deterministic, not wall-clock)
+  const wr=C*(0.4+2.5*fr);
+  mx.strokeStyle=aura; mx.globalAlpha=(1-fr)*0.5; mx.lineWidth=2;
+  mx.beginPath(); mx.arc(cellCx(god.j),cellCy(god.i),wr,0,7); mx.stroke(); mx.globalAlpha=1;
+  // arrows to pushed cells (the agenda anchor)
+  mx.strokeStyle=aura; mx.globalAlpha=0.7; mx.lineWidth=1.5;
+  for(const [pi,pj,cnt] of (god.push||[])){
+    mx.beginPath(); mx.moveTo(x,y); mx.lineTo(cellCx(pj),cellCy(pi)); mx.stroke();
+    mx.fillStyle=aura; mx.globalAlpha=0.25;
+    mx.fillRect(cellX(pj)+2,cellY(pi)+2,C-4,C-4); mx.globalAlpha=0.7;
+  }
+  mx.globalAlpha=1;
+  // the eye
+  mx.fillStyle="#1a1030"; mx.strokeStyle=aura; mx.lineWidth=2;
+  mx.beginPath(); mx.ellipse(x,y,s,s*0.6,0,0,7); mx.fill(); mx.stroke();
+  mx.beginPath(); mx.arc(x,y,s*0.32,0,7); mx.fillStyle=aura; mx.fill();
+}
+
+// ============================ drawing: flash layer (Э-4) ============================
+function drawFlashes(){
+  fx.clearRect(0,0,cF.width,cF.height);
+  const [A,B,fr]=curSnaps();
+  const evs=S.evByTick.get(B.t); if(!evs) return;
+  const C=S.cell;
+  // Э-4: aggregate by (type,cell); capital_boost always aggregated to one pulse/tick.
+  const agg=new Map();
+  for(const e of evs){
+    if(!e.where)continue;
+    const key=e.type+"@"+e.where[0]+","+e.where[1];
+    if(!agg.has(key))agg.set(key,{type:e.type,i:e.where[0],j:e.where[1],n:0,dm:0});
+    const g=agg.get(key); g.n++; g.dm+=(e.dm||0);
+  }
+  const a=fr; // 0..1 within the tick — bloom then fade
+  const puff=(x,y,col,rad,alpha)=>{ fx.globalAlpha=alpha; fx.strokeStyle=col; fx.lineWidth=2;
+    fx.beginPath();fx.arc(x,y,rad,0,7);fx.stroke(); fx.globalAlpha=1; };
+  for(const g of agg.values()){
+    const x=cellCx(g.j), y=cellCy(g.i);
+    const fade=Math.sin(Math.min(1,a)*Math.PI); // 0->1->0 over the tick
+    switch(g.type){
+      case "artifact_capital_boost": // pulse through the gear into bodies
+        puff(x,y,S_GOOD,C*(0.2+0.5*a),0.6*fade); break;
+      case "artifact_store_draw":    // drop barn->body
+        fx.globalAlpha=0.8*fade; fx.fillStyle=S_GOLD;
+        fx.beginPath(); fx.arc(x,y-C*0.2+C*0.4*a,3,0,7); fx.fill(); fx.globalAlpha=1; break;
+      case "artifact_read":          // spark at the carrier
+        puff(x,y,S_ACCENT,C*0.25*fade,0.9*fade); break;
+      case "artifact_copy":          // arc (origin->copy) — draw a small bright arc
+        fx.globalAlpha=0.9*fade; fx.strokeStyle=S_ACCENT; fx.lineWidth=2;
+        fx.beginPath(); fx.arc(x,y,C*0.3,-1.2,1.2); fx.stroke(); fx.globalAlpha=1; break;
+      case "artifact_write":
+        puff(x,y,"#cfe6ff",C*0.3*fade,0.9*fade); break;
+      case "artifact_store": case "artifact_capital":
+        puff(x,y,g.type==="artifact_store"?S_GOLD:S_GOOD,C*0.28*fade,0.7*fade); break;
+      case "artifact_ruin":          // dissolve into soil (points)
+        fx.globalAlpha=0.8*(1-a); fx.fillStyle="#8b6b4a";
+        for(let k=0;k<6;k++){ const ang=k*GOLDEN; const rr=C*0.3*a;
+          fx.fillRect(x+Math.cos(ang)*rr,y+Math.sin(ang)*rr,2,2);} fx.globalAlpha=1; break;
+      case "birth":
+        puff(x,y,houseColor(0,70),C*0.2*a,0.5*(1-a)); break;
+      case "death":
+        // handled as cross on the glyph layer; a faint mark here
+        break;
+    }
+    // Э-4: count badge when aggregated
+    if(g.n>5){ fx.fillStyle="#fff"; fx.globalAlpha=0.85; fx.font="10px monospace";
+      fx.fillText("×"+g.n, x+6, y-6); fx.globalAlpha=1; }
+  }
+  // highlight a clicked chronicle locus
+  if(S._locus && S._locus.t===B.t){
+    fx.strokeStyle=S_ACCENT; fx.lineWidth=3; fx.globalAlpha=0.7+0.3*Math.sin(a*6);
+    fx.strokeRect(cellX(S._locus.j)+1,cellY(S._locus.i)+1,C-2,C-2); fx.globalAlpha=1;
+  }
+}
+
+// ============================ side panel ============================
+function drawSpark(cv, series, color, opts={}){
+  const ctx=cv.getContext("2d"), W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  if(!series.length)return;
+  const lo=opts.lo!==undefined?opts.lo:Math.min(...series);
+  const hi=opts.hi!==undefined?opts.hi:Math.max(...series,lo+1e-9);
+  const n=series.length;
+  ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.beginPath();
+  for(let k=0;k<n;k++){ const x=k/(n-1||1)*(W-2)+1; const y=H-2-((series[k]-lo)/(hi-lo||1))*(H-4);
+    k?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.stroke();
+  // playhead
+  const px=S.idx/(S.snaps.length-1||1)*(W-2)+1;
+  ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,H);ctx.stroke();
+}
+let _sparkCache=null;
+function updatePanel(){
+  const [,B]=curSnaps();
+  const m=B.metrics;
+  const inv=Math.abs(m.invariant-S.M0);
+  const el=$("mInv"); el.textContent=inv.toExponential(2);
+  el.className="plaque "+(inv<1e-9?"ok":"bad");
+  $("mSigma").textContent=m.invariant.toFixed(6);
+  $("mPop").textContent=m.pop;
+  $("mGini").textContent=m.gini_body.toFixed(3);
+  $("tickLabel").textContent="t "+B.t;
+  $("chronT").textContent=B.t;
+  if(!_sparkCache){
+    _sparkCache={pop:S.snaps.map(s=>s.metrics.pop),
+      gini:S.snaps.map(s=>s.metrics.gini_body),
+      v:S.snaps.map(s=>s.metrics.mass_vessel),
+      st:S.snaps.map(s=>s.metrics.mass_store),
+      cap:S.snaps.map(s=>s.metrics.mass_capital)};
+  }
+  if(S.layer.metrics){
+    drawSpark($("spPop"),_sparkCache.pop,S_ACCENT);
+    drawSpark($("spGini"),_sparkCache.gini,S_GOLD,{lo:0,hi:1});
+    const mc=$("spMass"), c=mc.getContext("2d"); c.clearRect(0,0,mc.width,mc.height);
+    const hi=Math.max(1,...(_sparkCache.v),...(_sparkCache.st),...(_sparkCache.cap));
+    const overlay=(ser,col)=>drawSparkOverlay(mc,ser,col,hi);
+    overlay(_sparkCache.v,S_ACCENT); overlay(_sparkCache.st,S_GOLD); overlay(_sparkCache.cap,S_GOOD);
+    const px=S.idx/(S.snaps.length-1||1)*(mc.width-2)+1;
+    c.strokeStyle="rgba(255,255,255,.35)";c.beginPath();c.moveTo(px,0);c.lineTo(px,mc.height);c.stroke();
+  }
+  updateChronicle(B.t);
+  updateInspector();
+}
+function drawSparkOverlay(cv,series,color,hi){
+  const ctx=cv.getContext("2d"),W=cv.width,H=cv.height,n=series.length;
+  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
+  for(let k=0;k<n;k++){const x=k/(n-1||1)*(W-2)+1;const y=H-2-(series[k]/hi)*(H-4);k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+  ctx.stroke();
+}
+function buildChronFilter(){
+  const types=new Set(S.events.map(e=>e.type));
+  const sel=$("chronFilter"); sel.innerHTML="";
+  const o0=document.createElement("option");o0.value="*";o0.textContent="все типы";sel.appendChild(o0);
+  [...types].sort().forEach(t=>{const o=document.createElement("option");o.value=t;o.textContent=t;sel.appendChild(o);});
+  sel.onchange=()=>{S.chronFilter=sel.value; updateChronicle(displayTick());};
+}
+function updateChronicle(t){
+  const wrap=$("chronwrap"); const evs=(S.evByTick.get(t)||[]).filter(e=>S.chronFilter==="*"||e.type===S.chronFilter);
+  wrap.innerHTML="";
+  for(const e of evs.slice(0,200)){
+    const d=document.createElement("div"); d.className="ev";
+    const w=e.where?`(${e.where[0]},${e.where[1]})`:"";
+    d.innerHTML=`<span class="k">${e.type}</span> ${e.actor??""} <span class="k">${w}</span>`;
+    d.onclick=()=>{ if(e.where){S._locus={t,i:e.where[0],j:e.where[1]};}
+      if(e.type.startsWith("artifact")&&e.data&&e.data.aid){S.sel={kind:"art",id:e.data.aid};}
+      else if(e.actor!=null){S.sel={kind:"pawn",id:e.actor};} };
+    wrap.appendChild(d);
+  }
+  if(!evs.length) wrap.innerHTML='<div class="k" style="padding:4px 6px">— тихий тик —</div>';
+}
+function updateInspector(){
+  const box=$("inspBody"); if(!S.sel){box.innerHTML='<span class="k">клик по телу или артефакту</span>';return;}
+  const [,B]=curSnaps();
+  if(S.sel.kind==="pawn"){
+    const p=B.pawns.find(x=>x[0]===S.sel.id);
+    if(!p){box.innerHTML=`<span class="k">пешка ${S.sel.id} мертва/вне кадра</span>`;return;}
+    const [oid,i,j,body,house,phase]=p;
+    const kn=B.known.filter(e=>e[0]===oid||e[1]===oid).length;
+    const wrote=S.events.filter(e=>e.actor===oid&&(e.type==="artifact_write"||e.type==="artifact_copy")).length;
+    const readc=S.events.filter(e=>e.actor===oid&&e.type==="artifact_read").length;
+    const series=S.snaps.map(s=>{const q=s.pawns.find(x=>x[0]===oid);return q?q[3]:null;}).filter(v=>v!=null);
+    box.innerHTML=`<div class="mrow"><b>пешка ${oid}</b><span class="k">дом ${house}</span></div>
+      <div class="k">клетка (${i},${j}) · фаза ${phase} · body ${body.toFixed(3)}</div>
+      <div class="k">знакомств: ${kn} · написал: ${wrote} · прочитал: ${readc}</div>
+      <canvas class="spark" id="ispark" width="300" height="34"></canvas>`;
+    drawSpark($("ispark"),series,houseColor(house));
+  } else {
+    const ar=B.arts.find(x=>x[0]===S.sel.id);
+    if(!ar){box.innerHTML=`<span class="k">артефакт ${S.sel.id} — руина/исчез</span>`;return;}
+    const [aid,kind,i,j,mass,sal,maker]=ar;
+    const mSer=S.snaps.map(s=>{const q=s.arts.find(x=>x[0]===aid);return q?q[4]:null;}).filter(v=>v!=null);
+    const sSer=S.snaps.map(s=>{const q=s.arts.find(x=>x[0]===aid);return q?q[5]:null;}).filter(v=>v!=null);
+    const readers=S.events.filter(e=>e.type==="artifact_read"&&e.data&&e.data.aid===aid).length;
+    box.innerHTML=`<div class="mrow"><b>${kind} ${aid}</b><span class="k">maker ${maker}</span></div>
+      <div class="k">клетка (${i},${j}) · mass ${mass.toFixed(3)} · salience ${sal.toFixed(3)}</div>
+      <div class="k">прочтений: ${readers}</div>
+      <div class="tag">mass</div><canvas class="spark" id="imass" width="300" height="28"></canvas>
+      <div class="tag">salience</div><canvas class="spark" id="isal" width="300" height="28"></canvas>`;
+    drawSpark($("imass"),mSer,S_ACCENT,{lo:0}); drawSpark($("isal"),sSer,S_GOLD,{lo:0,hi:1});
+  }
+}
+
+// ============================ hit-testing ============================
+cF.addEventListener("click",e=>{
+  const rect=cF.getBoundingClientRect(); const mxp=e.clientX-rect.left, myp=e.clientY-rect.top;
+  const [,B]=curSnaps();
+  let best=null,bd=1e9;
+  if(S.layer.arts) for(const ar of B.arts){ if(ar._px==null)continue; const d=Math.hypot(ar._px-mxp,ar._py-myp);
+    if(d<(ar._r+4)&&d<bd){bd=d;best={kind:"art",id:ar[0]};} }
+  if(S.layer.bodies) for(const p of B.pawns){ if(p._px==null)continue; const d=Math.hypot(p._px-mxp,p._py-myp);
+    if(d<(p._r+3)&&d<bd){bd=d;best={kind:"pawn",id:p[0]};} }
+  S.sel=best; updateInspector();
+});
+
+// ============================ playback loop ============================
+function loop(ts){
+  const dt=(ts-(S.lastTs||ts))/1000; S.lastTs=ts;
+  if(S.playing && S.snaps.length>1){
+    S.frac += dt*S.speed*2.0;          // 2 ticks/sec at 1× (playback pacing only)
+    while(S.frac>=1){ S.frac-=1; S.idx++; if(S.idx>=S.snaps.length-1){S.idx=S.snaps.length-1;S.frac=0;S.playing=false;setPlayBtn();} }
+    $("scrub").value=S.idx;
+  }
+  const t=displayTick();
+  if(t!==_lastGroundTick||S._groundDirty){ drawGround(t); _lastGroundTick=t; S._groundDirty=false; }
+  drawGlyphs(); drawFlashes(); updatePanel();
+  requestAnimationFrame(loop);
+}
+
+// ============================ controls ============================
+function setPlayBtn(){ $("btnPlay").textContent=S.playing?"⏸ pause":"▶ play"; $("btnPlay").classList.toggle("on",S.playing); }
+$("btnPlay").onclick=()=>{ if(S.idx>=S.snaps.length-1){S.idx=0;S.frac=0;} S.playing=!S.playing; setPlayBtn(); };
+$("btnStepF").onclick=()=>{ S.playing=false;setPlayBtn(); S.idx=Math.min(S.snaps.length-1,S.idx+1); S.frac=0; $("scrub").value=S.idx; };
+$("btnStepB").onclick=()=>{ S.playing=false;setPlayBtn(); S.idx=Math.max(0,S.idx-1); S.frac=0; $("scrub").value=S.idx; };
+$("speed").onchange=e=>S.speed=parseFloat(e.target.value);
+$("scrub").oninput=e=>{ S.idx=parseInt(e.target.value); S.frac=0; S.playing=false; setPlayBtn(); };
+$("btnPng").onclick=()=>{
+  // compose the three layers into one bitmap
+  const out=document.createElement("canvas"); out.width=cG.width; out.height=cG.height;
+  const o=out.getContext("2d"); o.fillStyle="#06070a"; o.fillRect(0,0,out.width,out.height);
+  o.drawImage(cG,0,0); o.drawImage(cM,0,0); o.drawImage(cF,0,0);
+  out.toBlob(b=>{ const u=URL.createObjectURL(b); const a=document.createElement("a");
+    a.href=u; a.download=`glass_t${displayTick()}.png`; a.click(); URL.revokeObjectURL(u); });
+};
+// layer checkboxes (Э-3: dunbar OFF by default when pop is likely > 120 — decided at boot)
+const layerRow=$("layerRow");
+LAYERS.forEach(l=>{
+  const lab=document.createElement("label");
+  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=true;
+  cb.onchange=()=>{ S.layer[l.key]=cb.checked; S._groundDirty=true; };
+  lab.appendChild(cb); lab.appendChild(document.createTextNode(l.n));
+  lab.dataset.key=l.key; layerRow.appendChild(lab);
+});
+// hotkeys
+window.addEventListener("keydown",e=>{
+  if(e.key===" "){e.preventDefault();$("btnPlay").click();}
+  else if(e.key==="ArrowRight")$("btnStepF").click();
+  else if(e.key==="ArrowLeft")$("btnStepB").click();
+  else if(e.key>="1"&&e.key<="7"){ const l=LAYERS[+e.key-1]; if(l){ S.layer[l.key]=!S.layer[l.key];
+    const cb=layerRow.querySelector(`label[data-key="${l.key}"] input`); if(cb)cb.checked=S.layer[l.key]; S._groundDirty=true; } }
+});
+// debug panel (?debug=1) — Э-2 knobs
+if(new URLSearchParams(location.search).get("debug")==="1"){
+  $("debug").classList.add("show");
+  $("dScale").oninput=e=>S.dbg.scale=+e.target.value;
+  $("dGamma").oninput=e=>S.dbg.gamma=+e.target.value/100;
+  $("dGlyph").oninput=e=>S.dbg.glyph=+e.target.value;
+}
+
+// ============================ go ============================
+tryFetch(); // if it fails (file://), the drop overlay stays up
+</script>
+</body>
+</html>
