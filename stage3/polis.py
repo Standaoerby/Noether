@@ -127,6 +127,19 @@ class PolisConfig:
     #    Store-only, own-cell-only, access-filtered in the eyes. See stage3/vision.py.
     store_settle: bool = False
     store_vision: bool = False
+    # mod G (intent, виток 1): триггер → интент → взаимодействие → результат — between
+    # the world-scan and the artifact physics a CHOICE appears, WITHOUT touching the
+    # physics. "off" => the layer is not built at all => byte-identical to vitok 2
+    # (gate MG-OFF). "reflex" confirms every action => physically ≡ off (gate
+    # MG-REFLEX: the scan itself must not perturb the world). "utility" filters verbs
+    # through the STRUCTURAL personality axes (score = Σ w·axis >= intent_theta) —
+    # personality touches matter for the first time. "live" takes a confirmed subset
+    # from a mind via the typed protocol (mock in vitok 1; via-log replay bit-exact;
+    # live прогоны — a separate session). See stage3/intent.py.
+    intent_policy: str = "off"
+    intent_theta: float = 0.5        # utility threshold (0.5 = честный дизайн, не калибровка)
+    intent_mind: object = None       # live: the mind; .decide(world, t, affordances)
+    intent_replay: dict = None       # live: {t: {oid: [verbs]}} — requests read from via-log
 
 
 class Polis(AppropriationWorld):
@@ -182,6 +195,13 @@ class Polis(AppropriationWorld):
             capital_on=cfg.capital_on, capital_stake=cfg.capital_stake,
             capital_rate=cfg.capital_rate, capital_access=cfg.capital_access,
         )
+        # mod G (intent): built ONLY when asked — "off" leaves the artifact passes with
+        # zero new computation in the hot path (self._artifacts.intent stays None).
+        if cfg.intent_policy != "off":
+            from .intent import IntentLayer
+            self._artifacts.intent = IntentLayer(
+                cfg.intent_policy, theta=cfg.intent_theta,
+                mind=cfg.intent_mind, replay=cfg.intent_replay)
         # start ASLEEP: injection_strength=0 so the injected term is inert => canon.
         # perception preset (radius/K/lag/regime/target_policy) MUST mirror the headline
         # appropriation run, else the sleeping Polis is not byte-identical to it.
@@ -283,6 +303,13 @@ class Polis(AppropriationWorld):
         # artifacts); when BOTH are empty the base hash is returned unchanged (MF-OFF/ME-OFF).
         base = super().state_fingerprint()
         blob = self._dunbar.fingerprint_blob() + self._artifacts.fingerprint_blob()
+        # mod G: intent state (counters + deny digest) enters the blob ONLY under
+        # utility/live — the vitok-2 conditional-suffix discipline (the kind term):
+        # off has no layer, reflex returns b"", so the OFF/REFLEX terms are
+        # byte-identical to vitok 2 and the anchors are holy (MG-OFF / MG-REFLEX).
+        it = self._artifacts.intent
+        if it is not None:
+            blob += it.fingerprint_blob()
         if not blob:
             return base
         import hashlib
