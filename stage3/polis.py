@@ -140,6 +140,19 @@ class PolisConfig:
     intent_theta: float = 0.5        # utility threshold (0.5 = честный дизайн, не калибровка)
     intent_mind: object = None       # live: the mind; .decide(world, t, affordances)
     intent_replay: dict = None       # live: {t: {oid: [verbs]}} — requests read from via-log
+    # mod G2 (control without ownership, Фаза 1) — EXTORT: a conserving body→body seizure
+    # from a co-present owner, the reverse-signed tribute (module 23 inverted). It fires
+    # ONLY when a guard (enforcer caste) is NOT co-located on the cell — crime lives in the
+    # shadow of presence (VERIFY #3: co-located = same cell, sim_institution._do_challenges).
+    # OFF by default => the verb does not exist => byte-identical to mod G (gate MG2-OFF).
+    # Requires an intent policy (reflex/utility/live) — under "off" there is no approve seam,
+    # so extort is a no-op. rho_extort=None mirrors the legitimate tribute rate (rho).
+    extort_on: bool = False
+    rho_extort: float = None         # seizure rate; None => = appropriation (rho), the mirror
+    extort_enforcers: int = 0        # guard caste size (0 => no guard => gate always open)
+    extort_guard_everywhere: bool = False  # saturated surveillance: the gate is closed on
+                                     # EVERY cell => EXTORT never fires (gate MG2-illegit:
+                                     # a fully-guarded world is byte-identical to no verb)
 
 
 class Polis(AppropriationWorld):
@@ -211,6 +224,20 @@ class Polis(AppropriationWorld):
             appropriation=cfg.appropriation, owner_policy=cfg.owner_policy,
             injection_strength=0.0, injectors=0, inject_amount=cfg.inject_amount,
         )
+        # mod G2 (EXTORT): built AFTER super().__init__ so self.speaker / owner caste exist.
+        # The guard caste mirrors sim_institution's: the M_e lowest-oid founder speakers AFTER
+        # the owner block, a fixed identity disjoint from owners. OFF (extort_on False) leaves
+        # every field inert and the step-seam a no-op (byte-identical, gate MG2-OFF).
+        self._extort_on = bool(cfg.extort_on)
+        self._rho_extort = (cfg.appropriation if cfg.rho_extort is None
+                            else float(cfg.rho_extort))
+        self._extorted_total = 0.0       # cumulative seized mass (kg) — bankable metric
+        self._extort_events = []         # (t, cell, victim_oid, [taker_oids], amount)
+        spk = sorted(self.speaker)
+        self._extort_enforcer_ids = (set(spk[self._n_owners:self._n_owners + int(cfg.extort_enforcers)])
+                                     if self._extort_on else set())
+        self._extort_cache_t = -1        # per-tick position cache (positions fixed within a tick)
+        self._extort_cache = {}          # cell -> (frozenset owner_oids present, guard_present)
 
     # ---- pawn views (thick personalities, deterministic from oid) ---------- #
     def pawn(self, oid) -> Pawn:
@@ -281,6 +308,12 @@ class Polis(AppropriationWorld):
         # tower's plant-growth+grazing for this tick, so material decay returns mass to
         # soil that only next tick's growth can draw on — the slow civilisational arc.
         self._artifacts.tick(self)
+        # mod G2 (EXTORT): the reverse-signed seizure, gated by the SAME intent layer the
+        # artifact verbs use. No-op unless extort_on AND an intent policy is built (approve
+        # seam). Runs after the artifact tick — the scan (tick-start) already set EXTORT
+        # affordances; positions are fixed within a tick, so the illegitimacy gate is stable.
+        if self._extort_on and self._artifacts.intent is not None:
+            self._extort(self.t)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -288,6 +321,88 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
+
+    # ---- mod G2: EXTORT — reverse-signed seizure in the shadow of presence ---- #
+    def _build_extort_cache(self):
+        """Per-tick map cell -> (frozenset of co-present owner oids, guard_present). Positions
+        are fixed within a tick (movement ran in super().step()), so ONE build per tick serves
+        both the affordance scan (tick-start) and the _extort pass (later, same tick)."""
+        from collections import defaultdict
+        bycell = defaultdict(list)
+        for a in self.pop:
+            bycell[(a.i, a.j)].append(a)
+        cache = {}
+        everywhere = self.cfg.extort_guard_everywhere
+        for cell, members in bycell.items():
+            owners = self._owners_at(cell, members)          # co-present owners (both policies)
+            guard = everywhere or any(a.oid in self._extort_enforcer_ids for a in members)
+            cache[cell] = (frozenset(o.oid for o in owners), guard)
+        self._extort_cache = cache
+        self._extort_cache_t = self.t
+
+    def intent_extra_affordances(self, a):
+        """World-contributed intent affordances (the hook intent.scan calls). EXTORT is
+        afforded to a pawn that is NEITHER a co-present owner NOR a guard, standing on a cell
+        where an owner IS present and NO guard is co-located (the illegitimacy gate — crime in
+        the shadow of presence). Empty when extort is OFF => the artifact menu is untouched."""
+        if not self._extort_on:
+            return ()
+        from .intent import EXTORT
+        if self._extort_cache_t != self.t:
+            self._build_extort_cache()
+        owners, guard = self._extort_cache.get((a.i, a.j), (frozenset(), False))
+        if guard or not owners:
+            return ()
+        if a.oid in owners or a.oid in self._extort_enforcer_ids:
+            return ()
+        return (EXTORT,)
+
+    def _extort(self, t):
+        """Execute the intent-confirmed EXTORT seizures. On each cell with a co-present owner
+        and NO guard, the confirmed extortionists seize rho_extort of each present owner's
+        body (body->body, conserving), pooled and split evenly among the takers (sorted oid,
+        last takes the float remainder). The exact mirror-reverse of appropriation-23."""
+        from collections import defaultdict
+        from .intent import EXTORT
+        it = self._artifacts.intent
+        if self._extort_cache_t != t:
+            self._build_extort_cache()
+        bycell = defaultdict(list)
+        for a in self.pop:
+            bycell[(a.i, a.j)].append(a)
+        for cell in sorted(bycell):
+            owners_oids, guard = self._extort_cache.get(cell, (frozenset(), False))
+            if guard or not owners_oids:
+                continue
+            members = bycell[cell]
+            takers = [a for a in sorted(members, key=lambda x: x.oid)
+                      if a.oid not in owners_oids
+                      and a.oid not in self._extort_enforcer_ids
+                      and it.allows(a.oid, EXTORT)]          # confirmed by the intent layer
+            if not takers:
+                continue
+            T = 0.0
+            for v in sorted((a for a in members if a.oid in owners_oids),
+                            key=lambda x: x.oid):
+                seize = self._rho_extort * v.body
+                if seize > v.body:                           # rho<=1 => never; clamp body >= 0
+                    seize = v.body
+                v.body -= seize                              # MASS leaves the owner...
+                T += seize
+            share = T / len(takers)
+            given = 0.0
+            for tk in takers[:-1]:
+                tk.body += share                             # ...and enters the takers
+                given += share
+                it.note_ok(tk.oid, EXTORT)
+            takers[-1].body += (T - given)                   # last takes remainder => pool exact
+            it.note_ok(takers[-1].oid, EXTORT)
+            self._extorted_total += T
+            self._extort_events.append((t, cell, tuple(sorted(owners_oids)),
+                                        tuple(tk.oid for tk in takers), round(T, 9)))
+            self.log.emit(t, "extort", "individual", where=cell, actor=takers[0].oid, dm=T,
+                          data={"victims": sorted(owners_oids),
+                                "takers": [tk.oid for tk in takers], "amount": round(T, 6)})
 
     def _matter(self):
         # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
