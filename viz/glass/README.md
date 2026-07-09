@@ -20,8 +20,9 @@ capital) и голос бога (Демерзель). **Один лог → од
 ```powershell
 py stage3\viz_export.py                 # -> viz\glass\data\ (≈8 МБ на 400 тиков box6)
 py stage3\viz_export.py --seed 8 --days 200 --every 2 --out viz\glass\data
+py stage3\viz_export.py --arena none --every 3 --out viz\glass\data   # витрина: вольная арена (~26 МБ — события доминируют; агрегация событий на экспорте — в TODO, до реальной нужды не делать)
 ```
-CLI: `--seed N` `--days N` `--every K` (снапшот каждые K тиков) `--out DIR`.
+CLI: `--seed N` `--days N` `--every K` (снапшот каждые K тиков) `--out DIR` `--arena none|box6`.
 Пакет данных регенерируемый и **git-ignored**.
 
 ### 2. Открыть фильм — два пути (оба обязательны)
