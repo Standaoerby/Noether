@@ -153,6 +153,27 @@ class PolisConfig:
     extort_guard_everywhere: bool = False  # saturated surveillance: the gate is closed on
                                      # EVERY cell => EXTORT never fires (gate MG2-illegit:
                                      # a fully-guarded world is byte-identical to no verb)
+    # mod G2 (Фаза 2) — DELEGATE / REVOKE: the michelsian hole. A root A holds a delegation
+    # RIGHT over the tribute-collecting owners (delegates B); each tick a delegate remits a
+    # share m of the tribute it collected up to A (body→body, conserving) — so A reaps k
+    # cells at once WITHOUT being present anywhere: an institutional bypass of the hard
+    # presence ceiling (VERIFY #1). The relation is permission-only and mass-neutral; only
+    # the remittance moves mass. REVOKE has TEETH — what makes a delegate actually remit:
+    #   none       unenforceable: every delegate defects, A reaps nothing (delegate ≡
+    #              distributed ownership; the apparatus without a tooth is empty).
+    #   reputation the mark-ledger: a defecting delegate is marked and loses its delegate
+    #              standing (barred from the network); compliant (low-deception) delegates
+    #              remit. Soft — A's flow is capped at the compliant fraction.
+    #   enforcer   spatial: a delegate remits only when a guard (delegate enforcer caste) is
+    #              co-located — the ceiling "turtles down" to the guard's own presence.
+    #   auto       the ledger self-enforces (god-physics): full remittance. ⛔ a substrate
+    #              CHEAT — the honesty control (MG2D-teeth), never a working regime.
+    # OFF by default => no root, no remittance => byte-identical to Фаза 1 (gate MG2D-OFF).
+    delegate_on: bool = False
+    delegate_m: float = 0.7          # meta-tribute share B→A (Stan 2026-07-09; root's cut)
+    delegate_root: int = None        # apex oid; None => auto (lowest-oid speaker, non-guard)
+    revoke_tooth: str = "none"       # none | reputation | enforcer | auto  (the REVOKE sweep)
+    delegate_enforcers: int = 0      # guard caste size for the enforcer tooth (0 => none)
 
 
 class Polis(AppropriationWorld):
@@ -238,6 +259,29 @@ class Polis(AppropriationWorld):
                                      if self._extort_on else set())
         self._extort_cache_t = -1        # per-tick position cache (positions fixed within a tick)
         self._extort_cache = {}          # cell -> (frozenset owner_oids present, guard_present)
+        # mod G2 (DELEGATE / REVOKE): the apex A and its guard caste (disjoint from the owner
+        # block AND the extort guards, so the castes never overlap). OFF => no root => the
+        # remittance seam is a no-op and _appropriate delegates straight to canon (MG2D-OFF).
+        self._delegate_on = bool(cfg.delegate_on)
+        self._delegate_m = float(cfg.delegate_m)
+        de = int(cfg.delegate_enforcers)
+        off0 = self._n_owners + int(cfg.extort_enforcers)
+        self._delegate_enforcer_ids = (set(spk[off0:off0 + de])
+                                       if self._delegate_on and cfg.revoke_tooth == "enforcer"
+                                       else set())
+        if not self._delegate_on:
+            self._delegate_root = None
+        elif cfg.delegate_root is not None:
+            self._delegate_root = int(cfg.delegate_root)
+        else:                            # auto: lowest-oid speaker not in any guard caste
+            cand = [o for o in spk if o not in self._extort_enforcer_ids
+                    and o not in self._delegate_enforcer_ids]
+            self._delegate_root = cand[0] if cand else (spk[0] if spk else None)
+        self._delegate_m_income = {}     # per-tick owner->tribute income (set by _appropriate)
+        self._delegate_marks = set()     # mark-ledger (b): defecting delegates barred (belief)
+        self._delegate_flow = 0.0        # cumulative meta-tribute reaped by the root (kg)
+        self._delegate_events = []       # (t, delegate_oid, amount) — remittances that fired
+        self._delegate_defections = 0    # count of ticks a delegate withheld (any tooth)
 
     # ---- pawn views (thick personalities, deterministic from oid) ---------- #
     def pawn(self, oid) -> Pawn:
@@ -314,6 +358,11 @@ class Polis(AppropriationWorld):
         # affordances; positions are fixed within a tick, so the illegitimacy gate is stable.
         if self._extort_on and self._artifacts.intent is not None:
             self._extort(self.t)
+        # mod G2 (DELEGATE): the root reaps its meta-tribute from the delegates' collections
+        # (body→body), gated by the REVOKE tooth. No-op unless delegate_on. Runs after extort
+        # so the tick's transfers settle before the apex takes its cut.
+        if self._delegate_on and self._delegate_root is not None:
+            self._delegate(self.t)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -403,6 +452,75 @@ class Polis(AppropriationWorld):
             self.log.emit(t, "extort", "individual", where=cell, actor=takers[0].oid, dm=T,
                           data={"victims": sorted(owners_oids),
                                 "takers": [tk.oid for tk in takers], "amount": round(T, 6)})
+
+    # ---- mod G2: DELEGATE / REVOKE — the apex reaps k cells without presence ---- #
+    def _appropriate(self):
+        """Canon appropriation (module 23), instrumented ONLY when delegate is on to capture
+        each owner's tribute income THIS tick. The canon call runs FIRST inside
+        AppropriationWorld.step (after all eating/movement), so the body delta across it is
+        PURELY tribute (owners gain, non-owners lose); snapshotting is read-only, so the world
+        after is byte-identical to canon and delegate_off delegates straight to super()."""
+        if not self._delegate_on:
+            return super()._appropriate()
+        before = {a.oid: a.body for a in self.pop}
+        super()._appropriate()
+        inc = {}
+        for a in self.pop:
+            d = a.body - before.get(a.oid, a.body)
+            if d > 1e-15:                          # only owners gain in _appropriate
+                inc[a.oid] = d
+        self._delegate_m_income = inc
+
+    def _delegate_remit(self, B, tooth, guard_cells):
+        """Does delegate B remit to the root this tick? The REVOKE tooth decides:
+        none -> never (unenforceable); auto -> always (god-physics cheat); enforcer -> only
+        when a guard is co-located (spatial); reputation -> the compliant (low-deception)
+        remit, a marked defector never does (barred from the network)."""
+        if tooth == "auto":
+            return True
+        if tooth == "enforcer":
+            return (B.i, B.j) in guard_cells
+        if tooth == "reputation":
+            if B.oid in self._delegate_marks:
+                return False                       # already marked -> out of the apparatus
+            return self.pawn(B.oid).personality.deception_lean <= 0.5
+        return False                               # "none" (and any unknown): all defect
+
+    def _delegate(self, t):
+        """Each delegate (a tribute-collecting owner, not the root, not a guard) remits share
+        m of its tribute income to the physically-absent root A — body→body, conserving. The
+        tooth gates the remittance; a reputation-defector is marked (loses delegate standing).
+        A reaps k cells at once without being present: the institutional bypass of presence."""
+        root = self._delegate_root
+        live = {a.oid: a for a in self.pop}
+        A = live.get(root)
+        if A is None:                              # root dead -> the right lapses this tick
+            return
+        tooth = self.cfg.revoke_tooth
+        guard_cells = ({(a.i, a.j) for a in self.pop if a.oid in self._delegate_enforcer_ids}
+                       if tooth == "enforcer" else frozenset())
+        for oid in sorted(self._delegate_m_income):
+            if oid == root or oid in self._delegate_enforcer_ids:
+                continue                           # the apex and its guards are not delegates
+            B = live.get(oid)
+            if B is None:
+                continue
+            if not self._delegate_remit(B, tooth, guard_cells):
+                self._delegate_defections += 1
+                if tooth == "reputation":
+                    self._delegate_marks.add(oid)  # the mark-ledger: barred henceforth
+                continue
+            amount = self._delegate_m * self._delegate_m_income[oid]
+            if amount > B.body:                    # cannot remit more body than one has
+                amount = B.body
+            if amount <= 0.0:
+                continue
+            B.body -= amount                       # MASS leaves the delegate...
+            A.body += amount                       # ...and reaches the absent root
+            self._delegate_flow += amount
+            self._delegate_events.append((t, oid, round(amount, 9)))
+            self.log.emit(t, "delegate_remit", "individual", where=(B.i, B.j), actor=oid,
+                          dm=amount, data={"root": root, "amount": round(amount, 6)})
 
     def _matter(self):
         # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
