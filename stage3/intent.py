@@ -86,9 +86,17 @@ READ_VESSEL = "READ_VESSEL"
 COPY_VESSEL = "COPY_VESSEL"
 DRAW_STORE = "DRAW_STORE"
 HARVEST_CAPITAL = "HARVEST_CAPITAL"
+# mod G2 (control without ownership): the FIRST non-artifact verb — a conserving body→body
+# seizure from a co-present owner, the reverse-signed tribute (module 23 inverted). Its
+# affordance comes from the WORLD (Polis.intent_extra_affordances), not the artifact field,
+# so intent.py stays the single intent authority while the mechanic lives in stage3/polis.
+# Appended at the END of VERBS: when extort is OFF the verb is never counted, so the
+# fingerprint blob (which lists only counted verbs) is byte-identical and the mod-G anchors
+# stand (gate MG2-OFF).
+EXTORT = "EXTORT"
 
 VERBS = (MINT_CAPITAL, MINT_STORE, WRITE_VESSEL, READ_VESSEL,
-         COPY_VESSEL, DRAW_STORE, HARVEST_CAPITAL)
+         COPY_VESSEL, DRAW_STORE, HARVEST_CAPITAL, EXTORT)
 
 # deny reasons (урок (к): three mechanisms, never conflated in the data)
 DENY_HALLUCINATION = "hallucination"   # (а) the mind asked outside the menu
@@ -104,6 +112,11 @@ UTILITY_W = {
     COPY_VESSEL:     ((0.4, "tg", False), (0.3, "aK", False), (0.3, "hc", True)),
     DRAW_STORE:      ((0.4, "ss", False), (0.3, "hc", False), (0.3, "dl", False)),
     HARVEST_CAPITAL: ((0.4, "ss", False), (0.3, "dl", False), (0.3, "aK", False)),
+    # EXTORT is the PREDATORY verb: deception_lean-led (its second material analogue after
+    # DRAW_STORE's free-riding), plus the bold (low caution) and the pressed. Weights sum to
+    # 1 so score ∈ [0,1] compares across verbs at the same theta (proposal, flagged to Stan
+    # at stop-point 1.6 like rho_extort — the vitok-1 seven were approved, this row is new).
+    EXTORT:          ((0.5, "dl", False), (0.3, "hc", True), (0.2, "ss", False)),
 }
 
 
@@ -200,6 +213,12 @@ class IntentLayer:
                              if field._access_ok(world, ar, a, field.capital_access))
                     if cm > 0.0 and float(world.soil[a.i, a.j]) > 0.0:
                         vs.append(HARVEST_CAPITAL)
+            # mod G2: non-artifact verbs (EXTORT, later DELEGATE...) — the WORLD contributes
+            # affordances through a hook. Absent hook / feature OFF => empty => the artifact
+            # menu is untouched and OFF stays byte-identical.
+            extra = getattr(world, "intent_extra_affordances", None)
+            if extra is not None:
+                vs.extend(extra(a))
             aff[a.oid] = tuple(vs)
         self.affordances = aff
         # ---- INTENT: the policy confirms ------------------------------------ #
@@ -233,7 +252,7 @@ class IntentLayer:
                     else:
                         # (а) the mind's hallucination: typed «нельзя», world untouched
                         self._count(oid, v)[1] += 1
-                        self.denies.append((t, oid, v, DENY_HALLUCINATION))
+                        self.denies.append((t, oid, v, DENY_HALLUCINATION, None))
                 approved[oid] = frozenset(ok)
             self.approved = approved
         # reflex confirms at execution (allows() below) — nothing to prepare
@@ -256,19 +275,22 @@ class IntentLayer:
         """The action EXECUTED (called right after the mutation) — RESULT, ok++."""
         self._count(oid, verb)[0] += 1
 
-    def note_gate_fail(self, oid, verb):
+    def note_gate_fail(self, oid, verb, cell=None):
         """A physical gate refused an actor at execution. A deny is logged ONLY if the
         actor both WANTED the verb (policy allows) and COULD at scan (affordance stood):
         (в) self_preempt if its own mint this tick displaced it, else (б) race — an
         earlier-oid pawn changed the world. Everything else is silence (either the
-        policy filtered it, or it was never possible — not a frustration event)."""
+        policy filtered it, or it was never possible — not a frustration event). `cell` is
+        the LOCUS (кто/где отказал) — recorded in the deny record for the reputation/
+        DELEGATE metrics; it never enters the fingerprint digest (keyed by verb/reason
+        only), so loci are observer-state and the anchors stay byte-identical."""
         if verb not in self.affordances.get(oid, ()):
             return
         if not self.allows(oid, verb):
             return
         reason = DENY_SELF_PREEMPT if oid in self._minted else DENY_RACE
         self._count(oid, verb)[1] += 1
-        self.denies.append((self._t, oid, verb, reason))
+        self.denies.append((self._t, oid, verb, reason, cell))
 
     def _count(self, oid, verb):
         c = self.counters.setdefault(oid, {})
@@ -294,9 +316,9 @@ class IntentLayer:
             parts.append(f"{oid}:" + ",".join(f"{v}={c[v][0]}/{c[v][1]}"
                                               for v in VERBS if v in c))
         dd = {}
-        for (_t, _oid, verb, reason) in self.denies:
-            key = (verb, reason)
-            dd[key] = dd.get(key, 0) + 1
+        for rec in self.denies:                       # (t, oid, verb, reason[, cell])
+            key = (rec[2], rec[3])                     # digest keyed by verb/reason ONLY —
+            dd[key] = dd.get(key, 0) + 1               # loci (rec[4]) stay observer-state
         dpart = ";".join(f"{v}:{r}={n}" for (v, r), n in sorted(dd.items()))
         head = f"||INTENT||{self.policy}:{self.theta:.6f}||"
         return (head + "#".join(parts) + "||DENY||" + dpart).encode()
@@ -316,9 +338,21 @@ class IntentLayer:
     def deny_breakdown(self) -> dict:
         """(verb, reason) -> count — the три источника, kept apart in the data."""
         out = {}
-        for (_t, _oid, verb, reason) in self.denies:
-            key = (verb, reason)
+        for rec in self.denies:                       # (t, oid, verb, reason[, cell])
+            key = (rec[2], rec[3])
             out[key] = out.get(key, 0) + 1
+        return out
+
+    def deny_loci(self, verb=None) -> dict:
+        """LOCUS breakdown (кто/где отказал): cell -> deny count, optionally for one verb.
+        Observer-only (never in the blob) — infrastructure for the reputation smychka and
+        the DELEGATE owner_gap. A deny with no recorded cell is skipped."""
+        out = {}
+        for rec in self.denies:
+            cell = rec[4] if len(rec) > 4 else None
+            if cell is None or (verb is not None and rec[2] != verb):
+                continue
+            out[cell] = out.get(cell, 0) + 1
         return out
 
     def unmet_mint(self, oid) -> int:
