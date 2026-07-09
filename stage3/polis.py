@@ -174,6 +174,11 @@ class PolisConfig:
     delegate_root: int = None        # apex oid; None => auto (lowest-oid speaker, non-guard)
     revoke_tooth: str = "none"       # none | reputation | enforcer | auto  (the REVOKE sweep)
     delegate_enforcers: int = 0      # guard caste size for the enforcer tooth (0 => none)
+    delegate_compliance_dl: float = 0.5  # reputation tooth: a delegate complies (remits) iff
+                                     # its deception_lean <= this. Read ONLY when delegate_on
+                                     # and tooth="reputation"; default 0.5 reproduces vitok-1
+                                     # bit-for-bit (gate MG2V-REFACTOR). The compliant FRACTION
+                                     # it induces (not the threshold) is the social parameter.
 
 
 class Polis(AppropriationWorld):
@@ -483,7 +488,7 @@ class Polis(AppropriationWorld):
         if tooth == "reputation":
             if B.oid in self._delegate_marks:
                 return False                       # already marked -> out of the apparatus
-            return self.pawn(B.oid).personality.deception_lean <= 0.5
+            return self.pawn(B.oid).personality.deception_lean <= self.cfg.delegate_compliance_dl
         return False                               # "none" (and any unknown): all defect
 
     def _delegate(self, t):
