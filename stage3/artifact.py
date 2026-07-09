@@ -57,6 +57,9 @@ from dataclasses import dataclass, field
 
 from sim_eventlog import REPRO, DEATH
 
+from .intent import (MINT_CAPITAL, MINT_STORE, WRITE_VESSEL, READ_VESSEL,
+                     COPY_VESSEL, DRAW_STORE, HARVEST_CAPITAL)
+
 # aid namespace disjoint from oid: pawns number from 0 upward (into the thousands);
 # artifacts start far above so a merged structure could never collide (measured lesson
 # from the archipelago: overlapping id-spaces silently overwrite — KeyError). Cosmetic
@@ -142,6 +145,9 @@ class ArtifactField:
 
         self.artifacts: list[Artifact] = []
         self._next_aid = ARTIFACT_AID_BASE
+        # mod G (intent): attached by Polis ONLY when intent_policy != "off". None =>
+        # no filter, no scan, zero new computation in the hot path (gate MG-OFF).
+        self.intent = None
         # belief overlays (pure state, never mass):
         self.known_method: dict[int, int] = {}     # oid -> highest method_level it carries
         self._dwell: dict[int, tuple] = {}         # oid -> (cell, consecutive_ticks)
@@ -177,6 +183,13 @@ class ArtifactField:
         pop_sorted = sorted(world.pop, key=lambda a: a.oid)
         alive = {a.oid for a in world.pop}
         self._update_dwell(pop_sorted)
+        # mod G (intent): the affordance scan — pure reads through the SAME gate
+        # predicates the passes use (single source of truth). Runs between the dwell
+        # update and the first pass, so 'возможность' is the world as this tick's
+        # physics is about to meet it. Under "reflex" the scan runs but confirms
+        # everything — it must not perturb the world (gate MG-REFLEX).
+        if self.intent is not None:
+            self.intent.scan(self, world, pop_sorted, t)
         # vitok-2 mints run FIRST, in descending wealth-floor order (capital > store >
         # vessel): the richest freeze a tool, the rich store a surplus, the merely-fat
         # write. Any mint resets dwell, so a pawn mints AT MOST ONCE per tick and the
@@ -224,6 +237,49 @@ class ArtifactField:
             return False
         return a.body - self.write_stake >= WRITE_BODY_FLOOR
 
+    # ---- gate predicates (mod G refactor: the SINGLE source of truth) --------- #
+    # Each predicate is the verbatim gate its pass used inline (behaviour bit-for-bit,
+    # checked by MG-OFF immediately); the intent layer's affordance scan calls the SAME
+    # methods, so желание and возможность are measured against one law.
+    def _can_capitalize(self, a) -> bool:
+        if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+            return False
+        return a.body - self.capital_stake >= CAPITAL_BODY_FLOOR
+
+    def _can_store(self, a) -> bool:
+        if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+            return False
+        return a.body - self.store_stake >= STORE_BODY_FLOOR
+
+    def _can_draw(self, a) -> bool:
+        return a.body < self.store_draw_at
+
+    def _vessel_occupied(self):
+        # ONLY a readable VESSEL occupies a cell for writing purposes (kind-isolation).
+        return {(art.i, art.j) for art in self.artifacts
+                if art.kind == "vessel" and art.salience > self.read_threshold}
+
+    def _stores_bycell(self, t=None):
+        # vitok 3 (v2): when a tick `t` is given (the draw pass), a store minted THIS tick
+        # settles a tick before it can be drawn (born_t < t). The affordance scan runs
+        # BEFORE any mint this tick, so calling with no `t` yields the pre-mint stores and
+        # the settle filter would be a no-op there anyway — passing t only in _store_draw
+        # keeps the vitok-3 draw path byte-identical (MFv3-OFF anchor stands).
+        bycell = {}
+        for art in self.artifacts:
+            if art.kind == "store" and art.mass > 0.0:
+                if t is not None and self.store_settle and art.born_t >= t:
+                    continue
+                bycell.setdefault((art.i, art.j), []).append(art)
+        return bycell
+
+    def _capitals_bycell(self):
+        bycell = {}
+        for art in self.artifacts:
+            if art.kind == "capital" and art.mass > 0.0:
+                bycell.setdefault((art.i, art.j), []).append(art)
+        return bycell
+
     def _mint(self, world, a, method, t, is_copy):
         """Freeze write_stake of body into a NEW vessel carrying `method` — the single
         body→mass transfer (writing an original OR minting an improved copy). Resets the
@@ -240,6 +296,8 @@ class ArtifactField:
         self.artifacts.append(art)
         self.known_method[a.oid] = max(self.known_method.get(a.oid, 0), method)
         self._dwell[a.oid] = ((a.i, a.j), 0)       # spent the effort; re-settle to write again
+        if self.intent is not None:
+            self.intent._minted.add(a.oid)         # self-preemption marker (deny source в)
         ev = "artifact_copy" if is_copy else "artifact_write"
         world.log.emit(t, ev, "individual", where=(a.i, a.j), actor=a.oid, dm=-stake,
                        data={"aid": art.aid, "method": method, "stake": round(stake, 6)})
@@ -253,16 +311,22 @@ class ArtifactField:
         nothing here — copying (below) improves the existing lineage instead."""
         # ONLY a readable VESSEL occupies a cell for writing purposes: a store/capital
         # standing here must not block the knowledge layer (kind-isolation, vitok 2).
-        occupied = {(art.i, art.j) for art in self.artifacts
-                    if art.kind == "vessel" and art.salience > self.read_threshold}
+        occupied = self._vessel_occupied()
+        it = self.intent
         for a in pop_sorted:
             if (a.i, a.j) in occupied:             # a readable carrier here -> copying's job
                 continue
             if not self._can_write(a):
+                if it is not None:                 # afforded at scan? then self-preempted
+                    it.note_gate_fail(a.oid, WRITE_VESSEL)
                 continue
+            if it is not None and not it.allows(a.oid, WRITE_VESSEL):
+                continue                           # filtered by intent — not a deny
             method = self.known_method.get(a.oid, 0)
             art = self._mint(world, a, method, t, is_copy=False)
             self.writes.append((t, art.aid, a.oid, (a.i, a.j), self.write_stake, method))
+            if it is not None:
+                it.note_ok(a.oid, WRITE_VESSEL)
 
     def _readable_bycell(self):
         # kind-isolation (vitok 2): only a VESSEL is a carrier of meaning. A store or a
@@ -294,6 +358,7 @@ class ArtifactField:
         bycell = self._readable_bycell()
         if not bycell:
             return
+        it = self.intent
         for a in pop_sorted:
             here = bycell.get((a.i, a.j))
             if not here:
@@ -303,6 +368,11 @@ class ArtifactField:
                 art.salience = self.salience0          # REFRESH: presence keeps it loud
                 if art.aid in seen:
                     continue
+                # mod G: REFRESH is ambient physics (присутствие держит культуру
+                # громкой — не акт; решение 2026-07-08); intent gates ONLY the
+                # absorption. A denied reader keeps the carrier loud but never learns.
+                if it is not None and not it.allows(a.oid, READ_VESSEL):
+                    continue
                 seen.add(art.aid)                      # READ: first contact
                 m = art.payload.get("method_level", 0)
                 if m > self.known_method.get(a.oid, 0):
@@ -311,6 +381,8 @@ class ArtifactField:
                 world.log.emit(t, "artifact_read", "individual", where=(a.i, a.j),
                                actor=a.oid, data={"aid": art.aid, "method": m,
                                                   "maker": art.maker_oid, "born_t": art.born_t})
+                if it is not None:
+                    it.note_ok(a.oid, READ_VESSEL)
 
     # ---- COPYING: mint an IMPROVED copy on a readable carrier (ratchet) --- #
     def _copying(self, world, pop_sorted, t):
@@ -326,15 +398,24 @@ class ArtifactField:
         bycell = self._readable_bycell()
         if not bycell:
             return
+        it = self.intent
         for a in pop_sorted:
             here = bycell.get((a.i, a.j))
-            if not here or not self._can_write(a):
+            if not here:
                 continue
+            if not self._can_write(a):
+                if it is not None:                 # afforded at scan? then self-preempted
+                    it.note_gate_fail(a.oid, COPY_VESSEL)
+                continue
+            if it is not None and not it.allows(a.oid, COPY_VESSEL):
+                continue                           # filtered by intent — not a deny
             src = max(here, key=lambda ar: (ar.payload.get("method_level", 0), ar.aid))
             base = max(self.known_method.get(a.oid, 0), src.payload.get("method_level", 0))
             new_method = base + 1                      # ratchet: an improved re-inscription
             art = self._mint(world, a, new_method, t, is_copy=True)
             self.copies.append((t, art.aid, a.oid, src.payload.get("method_level", 0), new_method))
+            if it is not None:
+                it.note_ok(a.oid, COPY_VESSEL)
 
     # ==================== VITOK 2: store + capital ========================= #
     def _access_ok(self, world, art, a, mode) -> bool:
@@ -362,6 +443,8 @@ class ArtifactField:
         self._next_aid += 1
         self.artifacts.append(art)
         self._dwell[a.oid] = ((a.i, a.j), 0)
+        if self.intent is not None:
+            self.intent._minted.add(a.oid)         # self-preemption marker (deny source в)
         world.log.emit(t, ev, "individual", where=(a.i, a.j), actor=a.oid, dm=-stake,
                        data={"aid": art.aid, "stake": round(stake, 6)})
         return art
@@ -375,17 +458,22 @@ class ArtifactField:
         if not self.capital_on:
             return
         has_cap = {(art.i, art.j) for art in self.artifacts if art.kind == "capital"}
+        it = self.intent
         for a in pop_sorted:
             if (a.i, a.j) in has_cap:
+                if it is not None:                 # afforded at scan? earlier oid took the cell
+                    it.note_gate_fail(a.oid, MINT_CAPITAL)
                 continue
-            if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+            if not self._can_capitalize(a):
                 continue
-            if a.body - self.capital_stake < CAPITAL_BODY_FLOOR:
-                continue
+            if it is not None and not it.allows(a.oid, MINT_CAPITAL):
+                continue                           # filtered by intent — not a deny
             art = self._mint_object(world, a, "capital", self.capital_stake, t,
                                     "artifact_capital")
             self.capitals.append((t, art.aid, a.oid, (a.i, a.j), self.capital_stake))
             has_cap.add((a.i, a.j))
+            if it is not None:
+                it.note_ok(a.oid, MINT_CAPITAL)
 
     # ---- STORING: the rich lay a SURPLUS by (body → mass) ----------------- #
     def _storing(self, world, pop_sorted, t):
@@ -395,14 +483,19 @@ class ArtifactField:
         question again, now for pure matter."""
         if not self.store_on:
             return
+        it = self.intent
         for a in pop_sorted:
-            if self._dwell.get(a.oid, ((a.i, a.j), 0))[1] < self.write_stasis:
+            if not self._can_store(a):
+                if it is not None:                 # afforded at scan? then self-preempted
+                    it.note_gate_fail(a.oid, MINT_STORE)
                 continue
-            if a.body - self.store_stake < STORE_BODY_FLOOR:
-                continue
+            if it is not None and not it.allows(a.oid, MINT_STORE):
+                continue                           # filtered by intent — not a deny
             art = self._mint_object(world, a, "store", self.store_stake, t,
                                     "artifact_store")
             self.stores.append((t, art.aid, a.oid, (a.i, a.j), self.store_stake))
+            if it is not None:
+                it.note_ok(a.oid, MINT_STORE)
 
     # ---- STORE DRAW: hunger unprints the reserve (mass → body) ------------ #
     def _store_draw(self, world, pop_sorted, t):
@@ -419,22 +512,19 @@ class ArtifactField:
         remaining 0.0 goes to soil and the object is removed as a ruin)."""
         if not self.store_on:
             return
-        bycell = {}
-        for art in self.artifacts:
-            if art.kind == "store" and art.mass > 0.0:
-                # vitok 3 (v2): a just-minted store settles for a tick before it can be
-                # drawn (born_t < t). OFF => no filter => byte-identical draw path.
-                if self.store_settle and art.born_t >= t:
-                    continue
-                bycell.setdefault((art.i, art.j), []).append(art)
+        bycell = self._stores_bycell(t)            # settle filter folded in (born_t < t)
         if not bycell:
             return
+        it = self.intent
         for a in pop_sorted:
-            if a.body >= self.store_draw_at:
+            if not self._can_draw(a):
                 continue
             here = bycell.get((a.i, a.j))
             if not here:
                 continue
+            if it is not None and not it.allows(a.oid, DRAW_STORE):
+                continue                           # filtered by intent — not a deny
+            drew = False
             for art in sorted(here, key=lambda ar: ar.aid):
                 if art.mass <= 0.0:
                     continue
@@ -448,7 +538,12 @@ class ArtifactField:
                                where=(a.i, a.j), actor=a.oid, dm=amount,
                                data={"aid": art.aid, "maker": art.maker_oid,
                                      "amount": round(amount, 6)})
+                drew = True
+                if it is not None:
+                    it.note_ok(a.oid, DRAW_STORE)
                 break                              # one draw per pawn per tick
+            if not drew and it is not None:        # heap drained/barred by earlier oid
+                it.note_gate_fail(a.oid, DRAW_STORE)
 
     # ---- CAPITAL HARVEST: tool-gated extraction (soil → body) ------------- #
     def _capital_harvest(self, world, pop_sorted, t):
@@ -465,22 +560,24 @@ class ArtifactField:
         remains — deterministic contention."""
         if not self.capital_on:
             return
-        bycell = {}
-        for art in self.artifacts:
-            if art.kind == "capital" and art.mass > 0.0:
-                bycell.setdefault((art.i, art.j), []).append(art)
+        bycell = self._capitals_bycell()
         if not bycell:
             return
+        it = self.intent
         for a in pop_sorted:
             here = bycell.get((a.i, a.j))
             if not here:
                 continue
+            if it is not None and not it.allows(a.oid, HARVEST_CAPITAL):
+                continue                           # filtered by intent — not a deny
             cap_mass = sum(ar.mass for ar in here
                            if self._access_ok(world, ar, a, self.capital_access))
             if cap_mass <= 0.0:
                 continue
             extra = min(float(world.soil[a.i, a.j]), self.capital_rate * cap_mass)
             if extra <= 0.0:
+                if it is not None:                 # soil drained by earlier oid -> race
+                    it.note_gate_fail(a.oid, HARVEST_CAPITAL)
                 continue
             world.soil[a.i, a.j] -= extra          # MASS leaves the soil...
             a.body += extra                        # ...through the tool, into the body
@@ -490,6 +587,8 @@ class ArtifactField:
                            where=(a.i, a.j), actor=a.oid, dm=extra,
                            data={"cap_mass": round(cap_mass, 6),
                                  "extra": round(extra, 6)})
+            if it is not None:
+                it.note_ok(a.oid, HARVEST_CAPITAL)
 
     # ---- MATERIAL decay: mass → soil (ruins to ground; conserved) --------- #
     def _material_decay(self, world, t):
