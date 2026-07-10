@@ -179,6 +179,18 @@ class PolisConfig:
                                      # and tooth="reputation"; default 0.5 reproduces vitok-1
                                      # bit-for-bit (gate MG2V-REFACTOR). The compliant FRACTION
                                      # it induces (not the threshold) is the social parameter.
+    delegate_root_select: str = "auto"  # vitok-2 Фаза 2 — who is the apex on the AUTO path
+                                     # (delegate_root is None):
+                                     #   auto      lowest speaker not in any guard caste — the
+                                     #             lowest OWNER, so the root carries a big body
+                                     #             (its own tribute) beside the reaped flow.
+                                     #   nonowner  the body-poor apex: lowest speaker OUTSIDE
+                                     #             owners AND guards — reaps flow it never
+                                     #             collected, so its only reserve is what the
+                                     #             flow leaves in its own body (the HG2V-2
+                                     #             owner_gap probe). Deterministic mirror of auto.
+                                     # Read ONLY on the auto path; default "auto" reproduces
+                                     # every anchor bit-for-bit (the field is inert otherwise).
 
 
 class Polis(AppropriationWorld):
@@ -278,9 +290,14 @@ class Polis(AppropriationWorld):
             self._delegate_root = None
         elif cfg.delegate_root is not None:
             self._delegate_root = int(cfg.delegate_root)
-        else:                            # auto: lowest-oid speaker not in any guard caste
-            cand = [o for o in spk if o not in self._extort_enforcer_ids
-                    and o not in self._delegate_enforcer_ids]
+        else:                            # auto path: deterministic apex, fixed at init
+            excl = set(self._extort_enforcer_ids) | set(self._delegate_enforcer_ids)
+            if cfg.delegate_root_select == "nonowner":
+                # Фаза 2: the body-poor apex — also exclude the owner caste (spk[:n_owners],
+                # sim_appropriation's static owner block), so the root reaps flow it never
+                # collected and holds no reserve of its own. Mirror of the auto rule.
+                excl |= set(spk[:self._n_owners])
+            cand = [o for o in spk if o not in excl]
             self._delegate_root = cand[0] if cand else (spk[0] if spk else None)
         self._delegate_m_income = {}     # per-tick owner->tribute income (set by _appropriate)
         self._delegate_marks = set()     # mark-ledger (b): defecting delegates barred (belief)

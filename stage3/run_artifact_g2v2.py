@@ -18,6 +18,10 @@ GATES:
                  anchors + the two extort anchors + the delegate-auto anchor).
   MG2V-mass      every swept threshold keeps the four-term invariant (<1e-9).
   MG2V-replay    every swept threshold replays bit-for-bit (deterministic, no key).
+  MG2V-apex      (Фаза 2) the body-poor apex (delegate_root_select="nonowner") is genuinely
+                 outside the owner caste while "auto" is the lowest owner; the nonowner world
+                 keeps the invariant and replays under both reputation and auto teeth. The new
+                 field defaults to "auto", so MG2V-REFACTOR/OFF already prove OFF-neutrality.
 
 PRE-REGISTERED (both outcome-formulations fixed BEFORE the run):
   HG2V-1  the compliance sweep, dl ∈ {0.3, 0.5, 0.7, 0.9}, frame of #46 (arena none, m=0.7,
@@ -30,6 +34,13 @@ PRE-REGISTERED (both outcome-formulations fixed BEFORE the run):
               trophy UNCONDITIONAL: reputational deterrence needs no majority.
           Watch 0.9 (near-saturation) => should approach the god-ceiling; if not, the
           mechanic has a hole to find.
+  HG2V-2  the body-poor apex — hold the #46/#47 frame (arena none, m=0.7, tooth reputation)
+          and vary ONLY the apex: auto root (lowest owner, owner_gap≈0.32) vs nonowner root
+          (lowest speaker outside owners+guards). Print A_flow, the root's own body integral,
+          owner_gap and A/god on ONE time base.
+          (a) nonowner owner_gap > 1 => power decoupled from stock (kinetic власть-метаресурс);
+          (b) nonowner owner_gap <= 1 (NULL) => the apex accumulates in proportion to flow,
+              power stays body-bound on this conservative substrate.
 """
 from __future__ import annotations
 
@@ -131,6 +142,33 @@ def _gate_mg2v_replay():
     assert ok
 
 
+def _gate_mg2v_apex():
+    """Фаза 2 — the body-poor apex. delegate_root_select defaults to 'auto', so every prior
+    anchor is untouched (that neutrality is MG2V-REFACTOR/OFF, which run with the default). Here
+    we prove the NEW branch: (1) structural — the 'nonowner' apex is genuinely outside the owner
+    caste while the 'auto' apex is the lowest owner; (2) the nonowner world keeps the four-term
+    invariant and replays bit-for-bit under both the michelsian (reputation) and the ceiling
+    (auto) teeth."""
+    wa = _run(_cfgg2d(tooth="reputation", arena=None, days=0), 0)                    # auto apex
+    wn = _run(_cfgg2d(tooth="reputation", delegate_root_select="nonowner",
+                      arena=None, days=0), 0)                                        # body-poor
+    spk = sorted(wa.speaker); owners = set(spk[:wa._n_owners])
+    auto_root, np_root = wa._delegate_root, wn._delegate_root
+    structural = (auto_root in owners) and (np_root is not None) and (np_root not in owners)
+    mass_ok, replay_ok = True, True
+    for tooth in ("reputation", "auto"):
+        a = _run(_cfgg2d(tooth=tooth, delegate_root_select="nonowner", arena=None, days=300), 300)
+        b = _run(_cfgg2d(tooth=tooth, delegate_root_select="nonowner", arena=None, days=300), 300)
+        mass_ok = mass_ok and a.matter_drift() < 1e-9
+        replay_ok = replay_ok and a.state_fingerprint() == b.state_fingerprint()
+    ok = structural and mass_ok and replay_ok
+    print(f"MG2V-apex body-poor apex is a non-owner; mass+replay hold -> {'✓' if ok else '✗'}")
+    print(f"          auto root {auto_root} owner={auto_root in owners} · "
+          f"nonowner root {np_root} owner={np_root in owners} (want False)")
+    print(f"          nonowner mass<1e-9: {mass_ok} · replay bit-exact: {replay_ok}")
+    assert ok
+
+
 # --------------------------------------------------------------------------- #
 #  Experiment (гипотезу правит прогон; both formulations fixed above)          #
 # --------------------------------------------------------------------------- #
@@ -171,6 +209,53 @@ def _hg2v_1(seeds=(7, 8, 9), days=300):
     print("  UNCONDITIONAL. dl=0.9 (near-saturation) should approach the god-ceiling (A/god→1).")
 
 
+def _hg2v_2(seeds=(7, 8, 9), days=300):
+    """Фаза 2 — the body-poor apex. Hold the #46/#47 frame (arena none, m=0.7, tooth
+    reputation — the michelsian trophy) and vary ONLY who the apex is: the AUTO root (lowest
+    owner — carries its own tribute as a reserve, owner_gap≈0.32) vs the NONOWNER root (lowest
+    speaker outside owners+guards — reaps flow it never collected, holds no reserve). Same
+    seeds, same time base, so the two owner_gap numbers are directly comparable.
+
+    PRE-REGISTERED (both formulations fixed BEFORE the run):
+      (a) nonowner owner_gap > 1  => power is DECOUPLED from any stock: the apex reaps more
+          flow than its own body ever integrates — pure kinetic power, the direct
+          operationalisation of "власть = метаресурс, не запас" (смычка с законом оборота).
+      (b) nonowner owner_gap <= 1 (NULL) => even a body-poor apex builds a reserve in
+          proportion to the flow it reaps (the remittance lands in its body and integrates
+          faster than it is spent) — on this conservative substrate power does NOT decouple
+          from body, and the michelsian flow still presupposes an accumulating apex.
+      Control: the AUTO root printed on the same rows (expect owner_gap≈0.32)."""
+    print(f"\n{HDR}\nHG2V-2 — the body-poor apex (arena none, m=0.7, tooth reputation). owner_gap\n"
+          f"= A_flow / the root's OWN lifetime body integral; >1 => flow decoupled from any\n"
+          f"reserve. god-ceiling = the auto-tooth flow, same time base. (means over seeds {seeds})\n{HDR}")
+    god = {}
+    for s in seeds:
+        wg, _i, _t = _run_with_history(_cfgg2d(tooth="auto", arena=None, seed=s, days=days), days)
+        god[s] = wg._delegate_flow
+    print(f"  god-ceiling (auto A_flow) mean over seeds: {sum(god.values())/len(god):.2f}")
+    print(f"  {'apex':>10}{'A_flow':>9}{'A_bodyInt':>11}{'owner_gap':>10}{'A/god':>8}")
+    for sel in ("auto", "nonowner"):
+        agg = defaultdict(float); n = 0
+        for s in seeds:
+            w, integral, _t = _run_with_history(
+                _cfgg2d(tooth="reputation", delegate_root_select=sel,
+                        arena=None, seed=s, days=days), days)
+            assert w.matter_drift() < 1e-9, f"HG2V-2 leaked ({sel} s{s})"
+            flow = w._delegate_flow; root = w._delegate_root
+            a_int = integral.get(root, 0.0)
+            gap = (flow / a_int) if a_int > 0 else float("nan")
+            ratio = (flow / god[s]) if god[s] > 0 else float("nan")
+            agg["flow"] += flow; agg["aint"] += a_int
+            agg["gap"] += (gap if gap == gap else 0.0); agg["gapn"] += (1 if gap == gap else 0)
+            agg["ratio"] += (ratio if ratio == ratio else 0.0); n += 1
+        gapm = (agg["gap"] / agg["gapn"]) if agg["gapn"] else float("nan")
+        print(f"  {sel:>10}{agg['flow']/n:>9.2f}{agg['aint']/n:>11.1f}{gapm:>10.2f}"
+              f"{agg['ratio']/n:>8.2f}")
+    print("\n  read: (a) nonowner owner_gap > 1 => kinetic power, flow without a reserve (власть")
+    print("  как метаресурс); (b) owner_gap <= 1 => NULL, the apex accumulates in proportion to")
+    print("  flow — power stays body-bound. Control: auto root owner_gap≈0.32 (carries its own).")
+
+
 # --------------------------------------------------------------------------- #
 def main():
     print(HDR)
@@ -181,11 +266,15 @@ def main():
     _gate_mg2v_off()
     _gate_mg2v_mass()
     _gate_mg2v_replay()
+    _gate_mg2v_apex()
     if "--hg1" in sys.argv or "--all" in sys.argv:
         _hg2v_1()
-    print(f"\n{HDR}\nmod G2 vitok 2 Фаза 1 gates green: the parameterisation is behaviour-neutral")
+    if "--hg2" in sys.argv or "--all" in sys.argv:
+        _hg2v_2()
+    print(f"\n{HDR}\nmod G2 vitok 2 gates green: the parameterisation is behaviour-neutral")
     print("(MG2V-REFACTOR), the seven anchors stand (MG2V-OFF), the invariant holds and every")
-    print("threshold replays (MG2V-mass/replay). The trophy meets its knob.")
+    print("threshold replays (MG2V-mass/replay), and the body-poor apex is a non-owner that")
+    print("conserves and replays (MG2V-apex). The trophy meets its knob and loses its body.")
     print(HDR)
 
 
