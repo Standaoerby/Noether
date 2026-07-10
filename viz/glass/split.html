@@ -27,7 +27,14 @@
   #bar b{color:var(--accent)} .btn{background:#1b2331;color:var(--fg);border:1px solid #2b3547;
     border-radius:6px;padding:4px 9px;cursor:pointer;text-decoration:none;font-size:12px}
   .btn:hover{border-color:var(--accent)} .lay label{margin-right:7px;color:var(--mut);font-size:12px}
-  #panes{display:flex;height:calc(100% - 96px)} #panes iframe{flex:1;border:0;border-right:1px solid #232833;height:100%;width:50%}
+  #panes{position:relative;display:flex;height:calc(100% - 96px)} #panes iframe{flex:1;border:0;border-right:1px solid #232833;height:100%;width:50%}
+  #noPreset{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#06070a;text-align:center;padding:24px;z-index:5}
+  #noPreset.hide{display:none}
+  #noPreset .box{max-width:520px;display:flex;flex-direction:column;gap:10px}
+  #noPreset .big{font-size:17px;color:var(--accent)}
+  #noPreset code{background:#1b2331;padding:2px 6px;border-radius:4px;color:var(--fg)}
+  #noPreset .mut{color:var(--mut)}
   #scrubwrap{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--pan);border-top:1px solid #232833}
   #scrub{flex:1} .cap{padding:2px 12px;color:var(--mut);display:flex;gap:12px}
   .cap b{color:var(--fg)}
@@ -44,6 +51,10 @@
 </div>
 <div id="panes">
   <iframe id="fa"></iframe><iframe id="fb"></iframe>
+  <div id="noPreset" class="hide"><div class="box">
+    <div class="big">Пресет не выбран</div>
+    <div class="mut">Кнопки сверху; пакеты генерятся командами из <code>README</code> (§Пресеты).</div>
+  </div></div>
 </div>
 <div id="scrubwrap">
   <button class="btn" id="play">▶</button>
@@ -53,25 +64,43 @@
 <script>
 "use strict";
 const qs=new URLSearchParams(location.search);
-const A=qs.get("a")||"data", B=qs.get("b")||"data";
-document.getElementById("capA").textContent=qs.get("la")||A;
-document.getElementById("capB").textContent=qs.get("lb")||B;
 const fa=document.getElementById("fa"), fb=document.getElementById("fb");
-fa.src=`index.html?data=${encodeURIComponent(A)}&embed=1`;
-fb.src=`index.html?data=${encodeURIComponent(B)}&embed=1`;
-
-function post(msg){ [fa,fb].forEach(f=>{ try{f.contentWindow.postMessage(msg,"*");}catch(e){} }); }
 const scrub=document.getElementById("scrub"), tlab=document.getElementById("tlab");
+let A=null, B=null;   // set once panes actually load
+
+function post(msg){ if(!A) return; [fa,fb].forEach(f=>{ try{f.contentWindow.postMessage(msg,"*");}catch(e){} }); }
 function seek(t){ tlab.textContent=t; post({cmd:"seek",t:+t}); }
 scrub.addEventListener("input",()=>seek(+scrub.value));
 
-// discover the tick range from both metas (max days), so the master slider spans both films.
-Promise.all([A,B].map(d=>fetch(d+"/meta.json").then(r=>r.json()).catch(()=>({days:400}))))
-  .then(ms=>{ const mx=Math.max(...ms.map(m=>m.days||400)); scrub.max=mx; });
+function loadPanes(a,b,la,lb){
+  A=a; B=b;
+  document.getElementById("capA").textContent=la||a;
+  document.getElementById("capB").textContent=lb||b;
+  fa.src=`index.html?data=${encodeURIComponent(a)}&embed=1`;
+  fb.src=`index.html?data=${encodeURIComponent(b)}&embed=1`;
+  document.getElementById("noPreset").classList.add("hide");
+  // discover the tick range from both metas (max days), so the master slider spans both films.
+  Promise.all([a,b].map(d=>fetch(d+"/meta.json",{cache:"no-store"}).then(r=>r.json()).catch(()=>({days:400}))))
+    .then(ms=>{ const mx=Math.max(...ms.map(m=>m.days||400)); scrub.max=mx; });
+}
+
+// Явный ?a&b — грузим как раньше. Без параметров — НЕ грузим data|data молча: пробуем пресет
+// «3 зубья» (probe presets/tooth_none/meta.json), а если его нет — показываем плашку.
+(async function initPanes(){
+  if(qs.has("a")||qs.has("b")){
+    loadPanes(qs.get("a")||"data", qs.get("b")||"data", qs.get("la"), qs.get("lb"));
+    return;
+  }
+  let ok=false;
+  try{ const r=await fetch("presets/tooth_none/meta.json",{cache:"no-store"}); ok=r.ok; }catch(e){ ok=false; }
+  if(ok){ loadPanes("presets/tooth_none","presets/tooth_rep","tooth none","tooth reputation"); }
+  else { document.getElementById("noPreset").classList.remove("hide"); }
+})();
 
 // master play — advance the slider on a timer (panes are paused; the master drives them).
 let playing=false, timer=null;
 document.getElementById("play").onclick=()=>{
+  if(!A) return;   // нет загруженных панелей (плашка «пресет не выбран») — играть нечего
   playing=!playing; document.getElementById("play").textContent=playing?"⏸":"▶";
   if(playing){ timer=setInterval(()=>{ let v=+scrub.value+1; if(v>+scrub.max){v=0;}
     scrub.value=v; seek(v); },120); } else { clearInterval(timer); }
