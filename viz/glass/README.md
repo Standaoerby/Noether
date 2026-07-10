@@ -43,6 +43,46 @@ py stage3\run_artifact_f2.py --all      # регрессия механики: �
 
 ---
 
+## Пресеты сплит-скрина (`split.html`)
+
+`split.html` — две плёнки Glass-Polis бок о бок под **одним мастер-скраббером**, синхронно
+по тику. Панели грузятся как `index.html?data=DIR&embed=1`.
+
+### Сгенерировать пакеты-пресеты
+
+Четыре команды (дословно из шапки `split.html`, все с `--arena none`):
+
+```powershell
+# 1. Храповик — культура живёт (reflex) vs умирает (utility@0.5): глубина метода 2.7 -> 0.0
+py stage3\viz_export.py --intent reflex  --arena none --every 3 --events agg --out viz\glass\presets\ratchet_reflex
+py stage3\viz_export.py --intent utility --arena none --every 3 --events agg --out viz\glass\presets\ratchet_utility
+# 3. Зубья — аппарат пуст (none) vs михельсовская дыра (reputation@0.5)
+py stage3\viz_export.py --delegate --tooth none       --arena none --every 3 --events agg --out viz\glass\presets\tooth_none
+py stage3\viz_export.py --delegate --tooth reputation  --arena none --every 3 --events agg --out viz\glass\presets\tooth_rep
+```
+
+(Пресет 2 — dynasty vs bureaucracy — требует адаптера экспорта `InheritanceWorld`; Polis-
+экспортёр может отдать только сторону bureaucracy. Оформлен как задокументированный пробел.)
+
+> ⚠️ **Дефолт экспортёра — `--arena 6`.** Без явного `--arena none` получите загон 6×6
+> (реальный инцидент 09.07: «опять пасутся на 6×6»). Все пресеты сплита — `--arena none`.
+
+### Открыть
+
+```powershell
+cd viz\glass ; py -m http.server 8000
+# затем: http://localhost:8000/split.html?a=presets/tooth_none&b=presets/tooth_rep
+```
+
+Кнопки-пресеты в шапке (`1 храповик`, `3 зубья`) проставляют `?a&b&la&lb` сами. Открытие
+`split.html` **без параметров** автозагружает пресет «3 зубья», если он есть; если пакетов
+нет — плашка «Пресет не выбран» (без молчаливой загрузки `data|data`).
+
+Мастер-скраб внизу — **синхронный**: он ведёт обе панели через `postMessage`. Локальные
+`play` внутри панелей рассинхронизируют тики — гоняйте только мастер-скраб/мастер-play.
+
+---
+
 ## Формат данных (контракт экспортёр ↔ рендерер)
 
 `meta.json` — один объект: `schema`, `seed`, `days`, `arena_side`, `grid_rows/cols`, `cfg`
