@@ -120,6 +120,8 @@
       <canvas class="spark" id="spGini" width="300" height="34"></canvas>
       <div class="mrow"><span>масса: <span style="color:var(--accent)">vessel</span> / <span style="color:var(--gold)">store</span> / <span style="color:var(--good)">capital</span></span></div>
       <canvas class="spark" id="spMass" width="300" height="40"></canvas>
+      <div class="mrow" id="g2row" style="display:none"><span>власть: <span style="color:var(--gold)">A_flow</span> / <span style="color:#ff5d6c">extort</span> / <span style="color:#ff5d6c">метки</span></span><b id="mG2">—</b></div>
+      <canvas class="spark" id="spG2" width="300" height="40" style="display:none"></canvas>
     </div>
     <div class="sec" id="inspector">
       <h3>Инспектор</h3>
@@ -162,6 +164,10 @@ const LAYERS = [
   {key:"owners",  n:"3 собственность"}, {key:"arts", n:"4 артефакты"},
   {key:"dunbar",  n:"5 данбар"},  {key:"god",     n:"6 голос бога"},
   {key:"metrics", n:"7 метрики"},
+  // β-3: power without ownership — default OFF (the old film is unchanged unless asked).
+  {key:"remit",  n:"⇢ remit",  g2:true},  {key:"extort", n:"⇠ extort", g2:true},
+  {key:"marks",  n:"⌖ marks",  g2:true},  {key:"guard",  n:"▨ guard",  g2:true},
+  {key:"deny",   n:"⚑ deny",   g2:true},
 ];
 const S = {
   meta:null, snaps:[], events:[], evByTick:new Map(), snapByT:new Map(),
@@ -172,21 +178,38 @@ const S = {
   cell:32, ox:0, oy:0,       // layout: cell px + grid origin
   dbg:{scale:10, gamma:0.60, glyph:22},
 };
-LAYERS.forEach(l=>S.layer[l.key]=true);
+LAYERS.forEach(l=>S.layer[l.key]=!l.g2);   // β-3 G2 layers default OFF; the rest ON
 
 const $=id=>document.getElementById(id);
 const cG=$("cGround"), cM=$("cGlyph"), cF=$("cFlash");
 const gx=cG.getContext("2d"), mx=cM.getContext("2d"), fx=cF.getContext("2d");
 
 // ============================ loading ============================
+// β-3: a ?data=DIR URL param lets one renderer load any package dir (default ./data) — the
+// split-screen embeds two of these as iframes and drives them through the postMessage API.
+const DATA_DIR=(new URLSearchParams(location.search).get("data")||"./data").replace(/\/$/,"");
 async function tryFetch(){
   try{
-    const meta = await (await fetch("./data/meta.json",{cache:"no-store"})).json();
-    const snapT = await (await fetch("./data/snapshots.jsonl",{cache:"no-store"})).text();
-    const evT   = await (await fetch("./data/events.jsonl",{cache:"no-store"})).text();
+    const meta = await (await fetch(DATA_DIR+"/meta.json",{cache:"no-store"})).json();
+    const snapT = await (await fetch(DATA_DIR+"/snapshots.jsonl",{cache:"no-store"})).text();
+    const evT   = await (await fetch(DATA_DIR+"/events.jsonl",{cache:"no-store"})).text();
     boot(meta, parseJsonl(snapT), parseJsonl(evT));
     return true;
   }catch(e){ return false; }
+}
+// β-3 split-screen sync: the parent posts {cmd:'seek',t} / {cmd:'layer',key,on}; we obey and
+// (on local scrub) echo {cmd:'scrub',t} up so the sibling pane follows. embed=1 hides chrome.
+window.addEventListener("message",e=>{
+  const d=e.data||{}; if(d.cmd==="seek" && S.snaps.length){ seekTick(d.t); }
+  else if(d.cmd==="layer" && d.key in S.layer){ S.layer[d.key]=!!d.on;
+    const cb=layerRow.querySelector('label[data-key="'+d.key+'"] input'); if(cb)cb.checked=!!d.on; }
+});
+function seekTick(t){
+  // nearest snapshot index at-or-before t (snaps may be sparse under --every K); the rAF
+  // loop repaints on its own, so we only move the cursor here.
+  let best=0; for(let i=0;i<S.snaps.length;i++){ if(S.snaps[i].t<=t) best=i; else break; }
+  S.idx=best; S.frac=0; S.playing=false;
+  const sc=$("scrub"); if(sc) sc.value=S.idx;
 }
 function parseJsonl(t){
   const out=[]; let s=0;
@@ -219,6 +242,31 @@ function boot(meta,snaps,events){
   for(const e of events){ if(!S.evByTick.has(e.t))S.evByTick.set(e.t,[]); S.evByTick.get(e.t).push(e); }
   S.snapByT=new Map(); S.fieldFrames=[];
   snaps.forEach((s,i)=>{ S.snapByT.set(s.t,i); if(s.soil)S.fieldFrames.push(i); });
+  // β-3: normalise events (raw OR agg) into per-tick flashes + per-type sums, so the layers
+  // and sparks read one shape regardless of --events mode. root = the absent apex (may be
+  // off the ownership map — that IS the michelsian image); guards = the enforcer caste.
+  S.root=(meta.delegate_root===undefined?null:meta.delegate_root);
+  S.guards=new Set(meta.guard_ids||[]);
+  S.flashByTick=new Map(); S.sumsByTick=new Map();
+  const aggMode=(meta.events_mode==="agg");
+  if(aggMode){
+    for(const r of events){
+      S.sumsByTick.set(r.t,r.sums||{});
+      const fl=[]; for(const type in (r.loci||{})) for(const c of r.loci[type])
+        fl.push({type,i:c[0],j:c[1],n:c[2],dm:c[3]});
+      S.flashByTick.set(r.t,fl);
+    }
+  }else{
+    for(const e of events){
+      const sm=S.sumsByTick.get(e.t)||{}; const rec=sm[e.type]||{n:0,dm:0};
+      rec.n++; rec.dm+=(e.dm||0); sm[e.type]=rec; S.sumsByTick.set(e.t,sm);
+      if(!e.where)continue;
+      const fl=S.flashByTick.get(e.t)||[]; const key=e.type+"@"+e.where[0]+","+e.where[1];
+      let g=fl.find(x=>x._k===key); if(!g){g={_k:key,type:e.type,i:e.where[0],j:e.where[1],n:0,dm:0};fl.push(g);}
+      g.n++; g.dm+=(e.dm||0); S.flashByTick.set(e.t,fl);
+    }
+  }
+  S.marksMax=Math.max(1,...snaps.map(s=>(s.marks?s.marks.length:0)));
   buildChronFilter();
   // Э-3: the Dunbar layer defaults OFF when the film ever exceeds ~120 pawns (edges become
   // an unreadable hairball); the user can still switch it on with checkbox 5.
@@ -322,6 +370,22 @@ function drawGlyphs(){
   const [A,B,fr]=curSnaps();
   const C=S.cell;
 
+  // ---- β-3 deny: cumulative frustration heatmap (under everything) ----
+  if(S.layer.deny && B.deny){
+    let dmax=1; for(const d of B.deny) if(d[2]>dmax)dmax=d[2];
+    for(const [i,j,n] of B.deny){ mx.globalAlpha=0.10+0.45*(n/dmax);
+      mx.fillStyle="#d64550"; mx.fillRect(cellX(j),cellY(i),C,C); }
+    mx.globalAlpha=1;
+  }
+  // ---- β-3 guard: the enforcer's shadow (co-located cells) ----
+  if(S.layer.guard && B.guard){
+    for(const [i,j] of B.guard){ mx.globalAlpha=0.28; mx.fillStyle="#2b3a55";
+      mx.fillRect(cellX(j),cellY(i),C,C);
+      mx.globalAlpha=0.5; mx.strokeStyle="#5b7bb0"; mx.lineWidth=1;
+      mx.strokeRect(cellX(j)+1,cellY(i)+1,C-2,C-2); }
+    mx.globalAlpha=1;
+  }
+
   // ---- layer 3: ownership frames ----
   if(S.layer.owners){
     for(const [i,j,oid] of B.owners){
@@ -396,6 +460,30 @@ function drawGlyphs(){
       if(dset.has(oid)){ mx.strokeStyle=S_BAD; mx.lineWidth=2;
         mx.beginPath();mx.moveTo(px-5,py-5);mx.lineTo(px+5,py+5);mx.moveTo(px+5,py-5);mx.lineTo(px-5,py+5);mx.stroke(); }
       mx.globalAlpha=1;
+    }
+  }
+
+  // ---- β-3 marks: the reputation brand (persistent) on defecting delegates ----
+  if(S.layer.marks && B.marks && B.marks.length){
+    const pm=pawnMap(B); const mset=new Set(B.marks);
+    for(const oid of B.marks){ const p=pm.get(oid); if(!p)continue;
+      const x=(p._px!=null?p._px:cellCx(p[2])), y=(p._py!=null?p._py:cellCy(p[1]));
+      const r=(p._r!=null?p._r:8)+3;
+      mx.strokeStyle=S_BAD; mx.lineWidth=2; mx.globalAlpha=0.9;
+      mx.beginPath(); mx.arc(x,y,r,0,7); mx.stroke();               // a red ring = branded
+      mx.beginPath(); mx.moveTo(x-r*0.6,y-r*0.6); mx.lineTo(x+r*0.6,y+r*0.6); mx.stroke();
+      mx.globalAlpha=1;
+    }
+  }
+  // ---- β-3 root: the право-держатель halo on the (often bodiless-of-title) apex ----
+  if((S.layer.remit||S.layer.marks) && S.root!=null){
+    const pm=pawnMap(B); const rp=pm.get(S.root);
+    if(rp){ const x=(rp._px!=null?rp._px:cellCx(rp[2])), y=(rp._py!=null?rp._py:cellCy(rp[1]));
+      const r=(rp._r!=null?rp._r:8);
+      for(let k=1;k<=3;k++){ mx.globalAlpha=0.30/k; mx.strokeStyle=S_GOLD; mx.lineWidth=2;
+        mx.beginPath(); mx.arc(x,y,r+4+k*4,0,7); mx.stroke(); }
+      mx.globalAlpha=0.9; mx.fillStyle=S_GOLD; mx.font="bold 11px monospace";
+      mx.fillText("A", x-3, y-r-6); mx.globalAlpha=1;
     }
   }
 
@@ -481,23 +569,38 @@ function drawGod(god,fr){
 function drawFlashes(){
   fx.clearRect(0,0,cF.width,cF.height);
   const [A,B,fr]=curSnaps();
-  const evs=S.evByTick.get(B.t); if(!evs) return;
+  const flashes=S.flashByTick.get(B.t)||[];   // β-3: unified raw/agg per-tick flashes
   const C=S.cell;
-  // Э-4: aggregate by (type,cell); capital_boost always aggregated to one pulse/tick.
-  const agg=new Map();
-  for(const e of evs){
-    if(!e.where)continue;
-    const key=e.type+"@"+e.where[0]+","+e.where[1];
-    if(!agg.has(key))agg.set(key,{type:e.type,i:e.where[0],j:e.where[1],n:0,dm:0});
-    const g=agg.get(key); g.n++; g.dm+=(e.dm||0);
-  }
   const a=fr; // 0..1 within the tick — bloom then fade
+  const fade0=Math.sin(Math.min(1,a)*Math.PI);
   const puff=(x,y,col,rad,alpha)=>{ fx.globalAlpha=alpha; fx.strokeStyle=col; fx.lineWidth=2;
     fx.beginPath();fx.arc(x,y,rad,0,7);fx.stroke(); fx.globalAlpha=1; };
-  for(const g of agg.values()){
+  // ---- β-3 remit: pulsing lines delegate -> the absent root (the michelsian flow) ----
+  if(S.layer.remit && S.root!=null){
+    const pm=pawnMap(B); const rp=pm.get(S.root);
+    if(rp){ const rx=(rp._px!=null?rp._px:cellCx(rp[2])), ry=(rp._py!=null?rp._py:cellCy(rp[1]));
+      let dmax=1e-9; for(const g of flashes) if(g.type==="delegate_remit") dmax=Math.max(dmax,Math.abs(g.dm));
+      for(const g of flashes){ if(g.type!=="delegate_remit")continue;
+        const x=cellCx(g.j), y=cellCy(g.i);
+        fx.strokeStyle=S_GOLD; fx.globalAlpha=(0.25+0.6*(Math.abs(g.dm)/dmax))*fade0;
+        fx.lineWidth=1+2*(Math.abs(g.dm)/dmax);
+        fx.beginPath(); fx.moveTo(x,y); fx.lineTo(rx,ry); fx.stroke();
+        // a travelling bead along the line (deterministic in fr)
+        fx.globalAlpha=0.9*fade0; fx.fillStyle=S_GOLD;
+        fx.beginPath(); fx.arc(x+(rx-x)*a, y+(ry-y)*a, 2.5, 0, 7); fx.fill(); fx.globalAlpha=1;
+      }
+    }
+  }
+  for(const g of flashes){
     const x=cellCx(g.j), y=cellCy(g.i);
     const fade=Math.sin(Math.min(1,a)*Math.PI); // 0->1->0 over the tick
     switch(g.type){
+      case "delegate_remit": break;  // β-3: drawn as lines to the root above
+      case "extort":                 // β-3: seizure — red rings closing INWARD (anti-tribute)
+        if(!S.layer.extort) break;
+        fx.globalAlpha=0.85*fade; fx.strokeStyle=S_BAD; fx.lineWidth=2;
+        fx.beginPath(); fx.arc(x,y,C*0.42*(1-0.6*a),0,7); fx.stroke();
+        fx.beginPath(); fx.arc(x,y,C*0.22*(1-0.6*a),0,7); fx.stroke(); fx.globalAlpha=1; break;
       case "artifact_capital_boost": // pulse through the gear into bodies
         puff(x,y,S_GOOD,C*(0.2+0.5*a),0.6*fade); break;
       case "artifact_store_draw":    // drop barn->body
@@ -563,11 +666,16 @@ function updatePanel(){
   $("tickLabel").textContent="t "+B.t;
   $("chronT").textContent=B.t;
   if(!_sparkCache){
+    const dmAt=(t,type)=>{const sm=S.sumsByTick.get(t);return (sm&&sm[type])?sm[type].dm:0;};
     _sparkCache={pop:S.snaps.map(s=>s.metrics.pop),
       gini:S.snaps.map(s=>s.metrics.gini_body),
       v:S.snaps.map(s=>s.metrics.mass_vessel),
       st:S.snaps.map(s=>s.metrics.mass_store),
-      cap:S.snaps.map(s=>s.metrics.mass_capital)};
+      cap:S.snaps.map(s=>s.metrics.mass_capital),
+      // β-3: A_flow (remit) per tick, extort mass per tick, live marks per snapshot
+      aflow:S.snaps.map(s=>dmAt(s.t,"delegate_remit")),
+      extort:S.snaps.map(s=>Math.abs(dmAt(s.t,"extort"))),
+      marks:S.snaps.map(s=>s.marks?s.marks.length:0)};
   }
   if(S.layer.metrics){
     drawSpark($("spPop"),_sparkCache.pop,S_ACCENT);
@@ -578,6 +686,19 @@ function updatePanel(){
     overlay(_sparkCache.v,S_ACCENT); overlay(_sparkCache.st,S_GOLD); overlay(_sparkCache.cap,S_GOOD);
     const px=S.idx/(S.snaps.length-1||1)*(mc.width-2)+1;
     c.strokeStyle="rgba(255,255,255,.35)";c.beginPath();c.moveTo(px,0);c.lineTo(px,mc.height);c.stroke();
+    // β-3 power spark — shown only when the run carries a G2 mechanism
+    const hasG2=(S.root!=null)||_sparkCache.extort.some(v=>v>0);
+    $("g2row").style.display=hasG2?"":"none"; $("spG2").style.display=hasG2?"":"none";
+    if(hasG2){
+      const gc=$("spG2"), gctx=gc.getContext("2d"); gctx.clearRect(0,0,gc.width,gc.height);
+      const ghi=Math.max(1,...(_sparkCache.aflow),...(_sparkCache.extort));
+      drawSparkOverlay(gc,_sparkCache.aflow,S_GOLD,ghi);
+      drawSparkOverlay(gc,_sparkCache.extort,S_BAD,ghi);
+      const mhi=Math.max(1,...(_sparkCache.marks));
+      drawSparkOverlay(gc,_sparkCache.marks.map(v=>v/mhi*ghi),"#ff9aa2",ghi);
+      gctx.strokeStyle="rgba(255,255,255,.35)";gctx.beginPath();gctx.moveTo(px,0);gctx.lineTo(px,gc.height);gctx.stroke();
+      $("mG2").textContent="A "+(_sparkCache.aflow[S.idx]||0).toFixed(2)+" · ✕ "+(_sparkCache.marks[S.idx]||0);
+    }
   }
   updateChronicle(B.t);
   updateInspector();

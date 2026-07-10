@@ -1,2 +1,4 @@
 # captured snapshots are reproducible artifacts, not source — regenerate with capture.py
 runs/
+glass/data/
+glass/presets/

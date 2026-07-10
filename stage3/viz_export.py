@@ -38,6 +38,7 @@ from stage3.pawn import phase_of
 SCHEMA = "glass-1"
 FIELD_EVERY = 10       # soil/plant full-grid cadence (between them the renderer interpolates)
 TOP_KNOWN = 8          # Э-3: at most top-8 known-ties per pawn enter a snapshot
+TOP_DENY = 12          # β-3: at most top-12 deny loci per snapshot (cumulative, from deny_loci)
 
 # --- event-type manifest (names VERBATIM from the code — never renamed) ------------- #
 # Every type the EventLog can emit in the showcase run is classified into exactly one of
@@ -49,6 +50,9 @@ RENDERED = {
     "artifact_write", "artifact_copy", "artifact_read",
     "artifact_store", "artifact_capital",
     "artifact_store_draw", "artifact_capital_boost", "artifact_ruin",
+    # mod G2 (β-3): power without ownership — only emitted when the mechanism is on, so on
+    # the default showcase they are never seen and never enter meta.rendered (V-complete).
+    "extort", "delegate_remit",
 }
 IGNORED = {
     "seed",           # founders — drawn implicitly as the t=0 population
@@ -144,18 +148,29 @@ class _Houses:
 # --------------------------------------------------------------------------- #
 #  config                                                                      #
 # --------------------------------------------------------------------------- #
-def build_showcase_cfg(seed=7, days=400):
+def build_showcase_cfg(seed=7, days=400, arena_side=6, intent_policy="off",
+                       extort_on=False, delegate_on=False, revoke_tooth="none",
+                       delegate_m=0.7, delegate_compliance_dl=0.5,
+                       extort_enforcers=0, delegate_enforcers=0):
     """The showcase: everything the colony achieved in one run — appropriation economy,
     Dunbar social locus, the full artifact reservoir (vessel + store + capital), and a
     Demerzel that awakens ~tick 100 with an IMPLANT agenda. Signatures verified against
-    PolisConfig; the IMPLANT example is the working one from run_polis.py."""
+    PolisConfig; the IMPLANT example is the working one from run_polis.py.
+
+    mod G2 knobs (β-3) default OFF => the config is IDENTICAL to the shipped showcase, so
+    the default package is byte-for-byte the old film (gates V3-FP / V3-OLD). Turned on,
+    they add the power-without-ownership layers (extort / delegate / marks / guard / deny)."""
     return PolisConfig(
-        appropriation=0.5, owner_policy="claim", arena_side=6,
+        appropriation=0.5, owner_policy="claim", arena_side=arena_side,
         seed=seed, days=days,
         dunbar_K=15,                                   # mod-E demo default (ME-mass/replay)
         artifacts=True, store_on=True, capital_on=True, capital_rate=0.02,
         t_awaken=100,
         demerzel_directive=Directive(goal=IMPLANT, payload={"cell": (3, 3)}),
+        intent_policy=intent_policy,
+        extort_on=extort_on, delegate_on=delegate_on, revoke_tooth=revoke_tooth,
+        delegate_m=delegate_m, delegate_compliance_dl=delegate_compliance_dl,
+        extort_enforcers=extort_enforcers, delegate_enforcers=delegate_enforcers,
     )
 
 
@@ -179,6 +194,13 @@ def _cfg_manifest(cfg):
                                {"goal": d.goal,
                                 "cell": list(d.payload.get("cell")) if d.payload.get("cell") else None,
                                 "target": d.target}),
+        # mod G2 (β-3): the power-without-ownership knobs — the renderer reads these to know
+        # which layers to offer and to draw the root's "право-держатель" halo.
+        "intent_policy": cfg.intent_policy,
+        "extort_on": cfg.extort_on, "delegate_on": cfg.delegate_on,
+        "revoke_tooth": cfg.revoke_tooth, "delegate_m": cfg.delegate_m,
+        "delegate_compliance_dl": cfg.delegate_compliance_dl,
+        "extort_enforcers": cfg.extort_enforcers, "delegate_enforcers": cfg.delegate_enforcers,
         "REPRO": REPRO,
     }
 
@@ -244,6 +266,22 @@ def _snapshot(w, t, want_fields):
                 "push": [[c[0], c[1], n] for c, n in sorted(push.items())],
             }
 
+    # mod G2 (β-3): the power-without-ownership layers — read PUBLIC state only, and only
+    # when the mechanism is live, so a run with no G2 has a byte-identical snapshot (V3-OLD).
+    if w._delegate_on and w._delegate_marks:
+        snap["marks"] = sorted(int(o) for o in w._delegate_marks)   # the branded (persistent)
+    guard_ids = w._extort_enforcer_ids | w._delegate_enforcer_ids
+    if guard_ids:
+        gcells = sorted({(a.i, a.j) for a in pop if a.oid in guard_ids})
+        if gcells:
+            snap["guard"] = [[i, j] for (i, j) in gcells]           # the guard's shadow
+    it = w._artifacts.intent
+    if it is not None:
+        loci = it.deny_loci()
+        if loci:
+            top = sorted(loci.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:TOP_DENY]
+            snap["deny"] = [[c[0], c[1], n] for c, n in top]        # frustration heatmap
+
     if want_fields:
         snap["soil"] = [_q(v, 2) for v in w.soil.flatten().tolist()]
         snap["plant"] = [_q(v, 2) for v in w.plant.flatten().tolist()]
@@ -255,6 +293,40 @@ def _event_row(e):
     dm = None if e.dm is None else _q(e.dm, 6)
     return {"t": e.t, "type": e.kind, "actor": e.actor, "where": where,
             "dm": dm, "data": _json_safe(e.data or {})}
+
+
+def _aggregate_events(events, top_k=TOP_DENY):
+    """`--events agg`: collapse the raw event stream into ONE row per tick — per-type counts
+    and Σdm, plus the top-K loci (cells) per type by |Σdm| then count. Exactly what the film's
+    layers and sparklines read (remit/extort sums per tick, spatial loci); the raw per-event
+    list is dropped. Deterministic (sorted keys/loci). Layer-equivalent to raw (gate V3-AGG)."""
+    by_t = {}
+    for e in events:
+        row = by_t.setdefault(e.t, {})
+        rec = row.setdefault(e.kind, {"n": 0, "dm": 0.0, "cells": {}})
+        rec["n"] += 1
+        # round EACH event's dm to 6dp BEFORE summing — the same rounding the raw events.jsonl
+        # carries, so the agg equals what the renderer would sum from the raw stream exactly
+        # (gate V3-AGG: layer-equivalent, not merely close).
+        dm = 0.0 if e.dm is None else round(float(e.dm), 6)
+        rec["dm"] += dm
+        if e.where is not None:
+            c = (int(e.where[0]), int(e.where[1]))
+            cc = rec["cells"].setdefault(c, [0, 0.0])
+            cc[0] += 1
+            cc[1] += dm
+    out = []
+    for t in sorted(by_t):
+        sums, loci = {}, {}
+        for kind in sorted(by_t[t]):
+            rec = by_t[t][kind]
+            sums[kind] = {"n": rec["n"], "dm": _q(rec["dm"], 6)}
+            top = sorted(rec["cells"].items(),
+                         key=lambda kv: (-abs(kv[1][1]), -kv[1][0], kv[0]))[:top_k]
+            if top:
+                loci[kind] = [[c[0], c[1], v[0], _q(v[1], 6)] for c, v in top]
+        out.append({"t": t, "sums": sums, "loci": loci})
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -273,8 +345,15 @@ def run_capture(cfg, every):
     return w, snapshots
 
 
-def export(out_dir, seed=7, days=400, every=1, verbose=True):
-    cfg = build_showcase_cfg(seed=seed, days=days)
+def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mode="raw"):
+    """Export a package. `cfg` (a PolisConfig) overrides the default showcase — used to ship
+    the G2 layers and the split-screen presets; when None the default showcase is built from
+    seed/days (byte-identical to the shipped film). `events_mode`: "raw" (one line per event,
+    default) or "agg" (one line per tick: per-type sums + top-K loci; gate V3-AGG)."""
+    if cfg is None:
+        cfg = build_showcase_cfg(seed=seed, days=days)
+    else:
+        seed, days = cfg.seed, cfg.days
     w, snapshots = run_capture(cfg, every)
 
     events = w.log.events
@@ -307,13 +386,22 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True):
         "event_types_rendered": sorted(k for k in seen_types if k in RENDERED),
         "event_types_ignored": sorted(k for k in seen_types if k in IGNORED),
         "n_snapshots": len(snapshots), "n_events": len(events),
+        # mod G2 (β-3): who the apex is (root of the remit lines; may be off the ownership
+        # map — that IS the michelsian image) and the guard caste (the shadow layer).
+        "events_mode": events_mode,
+        "delegate_root": (int(w._delegate_root) if w._delegate_root is not None else None),
+        "guard_ids": sorted(int(o) for o in (w._extort_enforcer_ids | w._delegate_enforcer_ids)),
     }
 
     os.makedirs(out_dir, exist_ok=True)
     files = {}
     files["meta.json"] = (_dumps(meta) + "\n").encode("utf-8")
     files["snapshots.jsonl"] = ("".join(_dumps(s) + "\n" for s in snapshots)).encode("utf-8")
-    files["events.jsonl"] = ("".join(_dumps(_event_row(e)) + "\n" for e in events)).encode("utf-8")
+    if events_mode == "agg":
+        agg = _aggregate_events(events)
+        files["events.jsonl"] = ("".join(_dumps(r) + "\n" for r in agg)).encode("utf-8")
+    else:
+        files["events.jsonl"] = ("".join(_dumps(_event_row(e)) + "\n" for e in events)).encode("utf-8")
 
     shas = {}
     total = 0
@@ -347,11 +435,28 @@ def main():
     ap.add_argument("--days", type=int, default=400)
     ap.add_argument("--every", type=int, default=1)
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--arena", type=str, default="6", help="arena_side (int) or 'none'")
+    ap.add_argument("--events", choices=("raw", "agg"), default="raw")
+    # mod G2 (β-3) layer switches — default OFF => byte-identical to the shipped showcase.
+    ap.add_argument("--intent", choices=("off", "reflex", "utility", "live"), default="off")
+    ap.add_argument("--extort", action="store_true")
+    ap.add_argument("--delegate", action="store_true")
+    ap.add_argument("--tooth", choices=("none", "reputation", "enforcer", "auto"), default="none")
+    ap.add_argument("--m", type=float, default=0.7)
+    ap.add_argument("--compliance", type=float, default=0.5)
+    ap.add_argument("--extort-enforcers", type=int, default=0)
+    ap.add_argument("--delegate-enforcers", type=int, default=0)
     args = ap.parse_args()
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "..", "viz", "glass", "data")
     out = os.path.normpath(out)
-    export(out, seed=args.seed, days=args.days, every=args.every)
+    arena = None if str(args.arena).lower() == "none" else int(args.arena)
+    cfg = build_showcase_cfg(
+        seed=args.seed, days=args.days, arena_side=arena, intent_policy=args.intent,
+        extort_on=args.extort, delegate_on=args.delegate, revoke_tooth=args.tooth,
+        delegate_m=args.m, delegate_compliance_dl=args.compliance,
+        extort_enforcers=args.extort_enforcers, delegate_enforcers=args.delegate_enforcers)
+    export(out, every=args.every, cfg=cfg, events_mode=args.events)
 
 
 if __name__ == "__main__":
