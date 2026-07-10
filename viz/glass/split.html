@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><title>Стеклянный полис — сплит-скрин</title>
+<!--
+  split.html — β-3 Block C: two Glass-Polis films side by side, ONE master scrubber, synced
+  by tick. Each pane is a full index.html loaded with ?data=DIR&embed=1; the master posts
+  {cmd:'seek',t} and {cmd:'layer',key,on} to BOTH panes. Zero deps, zero build (like index).
+
+  Presets (URL: split.html?a=DIR&b=DIR&la=LABEL&lb=LABEL, or the buttons below). Generate the
+  packages with the exporter (agg keeps them small), then open via a local server:
+    # 1. Ratchet — culture lives (reflex) vs dies (utility@0.5): method depth 2.7 -> 0.0
+    py stage3\viz_export.py --intent reflex  --arena none --every 3 --events agg --out viz\glass\presets\ratchet_reflex
+    py stage3\viz_export.py --intent utility --arena none --every 3 --events agg --out viz\glass\presets\ratchet_utility
+    # 3. Teeth — the apparatus empty (none) vs the michelsian hole (reputation@0.5)
+    py stage3\viz_export.py --delegate --tooth none       --arena none --every 3 --events agg --out viz\glass\presets\tooth_none
+    py stage3\viz_export.py --delegate --tooth reputation  --arena none --every 3 --events agg --out viz\glass\presets\tooth_rep
+    # (preset 2 — dynasty vs bureaucracy — needs an InheritanceWorld export adapter; the
+    #  Polis exporter can only ship the bureaucracy side. Shipped as a documented gap.)
+    cd viz\glass ; py -m http.server 8000   # open http://localhost:8000/split.html?...
+-->
+<style>
+  :root{--bg:#0b0d12;--pan:#12151c;--fg:#e7ecf3;--mut:#8b93a3;--accent:#6cc5ff;}
+  *{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:13px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+  #bar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--pan);
+    border-bottom:1px solid #232833;flex-wrap:wrap}
+  #bar b{color:var(--accent)} .btn{background:#1b2331;color:var(--fg);border:1px solid #2b3547;
+    border-radius:6px;padding:4px 9px;cursor:pointer;text-decoration:none;font-size:12px}
+  .btn:hover{border-color:var(--accent)} .lay label{margin-right:7px;color:var(--mut);font-size:12px}
+  #panes{display:flex;height:calc(100% - 96px)} #panes iframe{flex:1;border:0;border-right:1px solid #232833;height:100%;width:50%}
+  #scrubwrap{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--pan);border-top:1px solid #232833}
+  #scrub{flex:1} .cap{padding:2px 12px;color:var(--mut);display:flex;gap:12px}
+  .cap b{color:var(--fg)}
+</style></head>
+<body>
+<div id="bar">
+  <b>Стеклянный полис — сплит</b>
+  <span class="cap"><span id="capA">A</span> ⟷ <span id="capB">B</span></span>
+  <span style="flex:1"></span>
+  <span>пресеты:</span>
+  <a class="btn" href="?a=presets/ratchet_reflex&b=presets/ratchet_utility&la=intent%20reflex&lb=intent%20utility%400.5">1 храповик</a>
+  <a class="btn" href="?a=presets/tooth_none&b=presets/tooth_rep&la=tooth%20none&lb=tooth%20reputation">3 зубья</a>
+  <span class="lay" id="layRow"></span>
+</div>
+<div id="panes">
+  <iframe id="fa"></iframe><iframe id="fb"></iframe>
+</div>
+<div id="scrubwrap">
+  <button class="btn" id="play">▶</button>
+  <input type="range" id="scrub" min="0" max="400" value="0">
+  <span>t <b id="tlab">0</b></span>
+</div>
+<script>
+"use strict";
+const qs=new URLSearchParams(location.search);
+const A=qs.get("a")||"data", B=qs.get("b")||"data";
+document.getElementById("capA").textContent=qs.get("la")||A;
+document.getElementById("capB").textContent=qs.get("lb")||B;
+const fa=document.getElementById("fa"), fb=document.getElementById("fb");
+fa.src=`index.html?data=${encodeURIComponent(A)}&embed=1`;
+fb.src=`index.html?data=${encodeURIComponent(B)}&embed=1`;
+
+function post(msg){ [fa,fb].forEach(f=>{ try{f.contentWindow.postMessage(msg,"*");}catch(e){} }); }
+const scrub=document.getElementById("scrub"), tlab=document.getElementById("tlab");
+function seek(t){ tlab.textContent=t; post({cmd:"seek",t:+t}); }
+scrub.addEventListener("input",()=>seek(+scrub.value));
+
+// discover the tick range from both metas (max days), so the master slider spans both films.
+Promise.all([A,B].map(d=>fetch(d+"/meta.json").then(r=>r.json()).catch(()=>({days:400}))))
+  .then(ms=>{ const mx=Math.max(...ms.map(m=>m.days||400)); scrub.max=mx; });
+
+// master play — advance the slider on a timer (panes are paused; the master drives them).
+let playing=false, timer=null;
+document.getElementById("play").onclick=()=>{
+  playing=!playing; document.getElementById("play").textContent=playing?"⏸":"▶";
+  if(playing){ timer=setInterval(()=>{ let v=+scrub.value+1; if(v>+scrub.max){v=0;}
+    scrub.value=v; seek(v); },120); } else { clearInterval(timer); }
+};
+
+// the G2 layer toggles, broadcast to both panes (the whole point of the split: same layers,
+// two worlds). Default OFF, matching the renderer.
+const LAY=[["remit","⇢ remit"],["extort","⇠ extort"],["marks","⌖ marks"],
+           ["guard","▨ guard"],["deny","⚑ deny"],["owners","собственность"]];
+const layRow=document.getElementById("layRow");
+for(const [key,label] of LAY){
+  const l=document.createElement("label"); const cb=document.createElement("input");
+  cb.type="checkbox"; cb.checked=(key==="owners");
+  cb.onchange=()=>post({cmd:"layer",key,on:cb.checked});
+  l.appendChild(cb); l.appendChild(document.createTextNode(" "+label)); layRow.appendChild(l);
+}
+</script>
+</body></html>

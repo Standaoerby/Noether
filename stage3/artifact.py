@@ -318,7 +318,7 @@ class ArtifactField:
                 continue
             if not self._can_write(a):
                 if it is not None:                 # afforded at scan? then self-preempted
-                    it.note_gate_fail(a.oid, WRITE_VESSEL)
+                    it.note_gate_fail(a.oid, WRITE_VESSEL, (a.i, a.j))
                 continue
             if it is not None and not it.allows(a.oid, WRITE_VESSEL):
                 continue                           # filtered by intent — not a deny
@@ -405,7 +405,7 @@ class ArtifactField:
                 continue
             if not self._can_write(a):
                 if it is not None:                 # afforded at scan? then self-preempted
-                    it.note_gate_fail(a.oid, COPY_VESSEL)
+                    it.note_gate_fail(a.oid, COPY_VESSEL, (a.i, a.j))
                 continue
             if it is not None and not it.allows(a.oid, COPY_VESSEL):
                 continue                           # filtered by intent — not a deny
@@ -462,7 +462,7 @@ class ArtifactField:
         for a in pop_sorted:
             if (a.i, a.j) in has_cap:
                 if it is not None:                 # afforded at scan? earlier oid took the cell
-                    it.note_gate_fail(a.oid, MINT_CAPITAL)
+                    it.note_gate_fail(a.oid, MINT_CAPITAL, (a.i, a.j))
                 continue
             if not self._can_capitalize(a):
                 continue
@@ -487,7 +487,7 @@ class ArtifactField:
         for a in pop_sorted:
             if not self._can_store(a):
                 if it is not None:                 # afforded at scan? then self-preempted
-                    it.note_gate_fail(a.oid, MINT_STORE)
+                    it.note_gate_fail(a.oid, MINT_STORE, (a.i, a.j))
                 continue
             if it is not None and not it.allows(a.oid, MINT_STORE):
                 continue                           # filtered by intent — not a deny
@@ -543,7 +543,7 @@ class ArtifactField:
                     it.note_ok(a.oid, DRAW_STORE)
                 break                              # one draw per pawn per tick
             if not drew and it is not None:        # heap drained/barred by earlier oid
-                it.note_gate_fail(a.oid, DRAW_STORE)
+                it.note_gate_fail(a.oid, DRAW_STORE, (a.i, a.j))
 
     # ---- CAPITAL HARVEST: tool-gated extraction (soil → body) ------------- #
     def _capital_harvest(self, world, pop_sorted, t):
@@ -577,7 +577,7 @@ class ArtifactField:
             extra = min(float(world.soil[a.i, a.j]), self.capital_rate * cap_mass)
             if extra <= 0.0:
                 if it is not None:                 # soil drained by earlier oid -> race
-                    it.note_gate_fail(a.oid, HARVEST_CAPITAL)
+                    it.note_gate_fail(a.oid, HARVEST_CAPITAL, (a.i, a.j))
                 continue
             world.soil[a.i, a.j] -= extra          # MASS leaves the soil...
             a.body += extra                        # ...through the tool, into the body
