@@ -82,6 +82,11 @@
   #hint{position:absolute;bottom:8px;left:8px;color:var(--dim);font-size:11px;z-index:5;
     background:rgba(6,7,10,.5);padding:3px 7px;border-radius:5px}
   .tag{font-size:10px;color:var(--dim)}
+  .modebadge{font-size:10px;padding:1px 6px;border-radius:5px;border:1px solid var(--line);
+    color:var(--dim);margin-left:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.05em}
+  .modebadge.agg{color:var(--gold);border-color:var(--gold)}
+  .evagg{display:flex;justify-content:space-between;gap:8px}
+  .evagg .n{font-variant-numeric:tabular-nums;color:var(--ink)}
 </style>
 </head>
 <body>
@@ -128,7 +133,7 @@
       <div id="inspBody" class="k">клик по телу или артефакту</div>
     </div>
     <div class="sec" style="display:flex;flex-direction:column;flex:1;min-height:120px;overflow:hidden">
-      <h3>Хроника тика <span id="chronT"></span>
+      <h3>Хроника тика <span id="chronT"></span><span id="chronMode" class="modebadge"></span>
         <select id="chronFilter" style="float:right;font-size:11px;padding:2px 4px"></select>
       </h3>
       <div id="chronwrap"></div>
@@ -248,7 +253,7 @@ function boot(meta,snaps,events){
   S.root=(meta.delegate_root===undefined?null:meta.delegate_root);
   S.guards=new Set(meta.guard_ids||[]);
   S.flashByTick=new Map(); S.sumsByTick=new Map();
-  const aggMode=(meta.events_mode==="agg");
+  const aggMode=(meta.events_mode==="agg"); S.aggMode=aggMode;
   if(aggMode){
     for(const r of events){
       S.sumsByTick.set(r.t,r.sums||{});
@@ -710,14 +715,20 @@ function drawSparkOverlay(cv,series,color,hi){
   ctx.stroke();
 }
 function buildChronFilter(){
-  const types=new Set(S.events.map(e=>e.type));
+  // agg-режим: типы приходят не из e.type (в agg-строке его нет), а из ключей sums по всем тикам.
+  let types;
+  if(S.aggMode){ types=new Set(); for(const sm of S.sumsByTick.values()) for(const k in sm) types.add(k); }
+  else { types=new Set(S.events.map(e=>e.type)); }
   const sel=$("chronFilter"); sel.innerHTML="";
   const o0=document.createElement("option");o0.value="*";o0.textContent="все типы";sel.appendChild(o0);
   [...types].sort().forEach(t=>{const o=document.createElement("option");o.value=t;o.textContent=t;sel.appendChild(o);});
   sel.onchange=()=>{S.chronFilter=sel.value; updateChronicle(displayTick());};
+  const badge=$("chronMode"); badge.textContent=S.aggMode?"agg":"raw"; badge.classList.toggle("agg",S.aggMode);
 }
 function updateChronicle(t){
-  const wrap=$("chronwrap"); const evs=(S.evByTick.get(t)||[]).filter(e=>S.chronFilter==="*"||e.type===S.chronFilter);
+  const wrap=$("chronwrap");
+  if(S.aggMode){ updateChronicleAgg(t,wrap); return; }   // agg — сводка по типам; raw ниже без изменений
+  const evs=(S.evByTick.get(t)||[]).filter(e=>S.chronFilter==="*"||e.type===S.chronFilter);
   wrap.innerHTML="";
   for(const e of evs.slice(0,200)){
     const d=document.createElement("div"); d.className="ev";
@@ -729,6 +740,31 @@ function updateChronicle(t){
     wrap.appendChild(d);
   }
   if(!evs.length) wrap.innerHTML='<div class="k" style="padding:4px 6px">— тихий тик —</div>';
+}
+// agg-режим: одна строка на тип — «KIND · ×n · Σdm». Числа берутся ровно из sums agg-строки
+// events.jsonl этого тика (гейт V3-AGG-CHRON: n/Σdm == agg-строке). Клик по типу — подсветка
+// его топ-локуса (cells из loci той же строки; конвенция клика-локуса как в raw).
+function fmtDm(x){ return String(+x.toFixed(3)); }   // 0.740 -> "0.74", целые -> "3"
+function updateChronicleAgg(t,wrap){
+  wrap.innerHTML="";
+  const sums=S.sumsByTick.get(t)||{};
+  const loci=S.flashByTick.get(t)||[];
+  const types=Object.keys(sums).filter(k=>S.chronFilter==="*"||k===S.chronFilter).sort();
+  if(!types.length){ wrap.innerHTML='<div class="k" style="padding:4px 6px">— тихий тик —</div>'; return; }
+  for(const type of types){
+    const rec=sums[type]||{n:0,dm:0};
+    const cells=loci.filter(c=>c.type===type);
+    const d=document.createElement("div"); d.className="ev evagg";
+    const dmStr=(rec.dm&&Math.abs(rec.dm)>1e-9)?` <span class="k">Σdm ${fmtDm(rec.dm)}</span>`:"";
+    d.innerHTML=`<span class="k">${type}</span><span class="n">×${rec.n}${dmStr}</span>`;
+    if(cells.length){
+      // топ-локус: по n, затем |dm|, затем (i,j) — детерминированно.
+      const top=cells.slice().sort((a,b)=>(b.n-a.n)||(Math.abs(b.dm)-Math.abs(a.dm))||(a.i-b.i)||(a.j-b.j))[0];
+      d.style.cursor="pointer";
+      d.onclick=()=>{ S._locus={t,i:top.i,j:top.j}; };
+    } else { d.style.cursor="default"; }
+    wrap.appendChild(d);
+  }
 }
 function updateInspector(){
   const box=$("inspBody"); if(!S.sel){box.innerHTML='<span class="k">клик по телу или артефакту</span>';return;}
