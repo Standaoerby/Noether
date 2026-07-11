@@ -191,6 +191,19 @@ class PolisConfig:
                                      #             owner_gap probe). Deterministic mirror of auto.
                                      # Read ONLY on the auto path; default "auto" reproduces
                                      # every anchor bit-for-bit (the field is inert otherwise).
+    delegate_depth: int = 1          # vitok-2 Фаза 3 — depth of the remittance chain A←B←C.
+                                     # 1 (default) => base owners remit straight to the root
+                                     #   (the single-hop mechanic; byte-identical to Фаза 2).
+                                     # d>=2 => (d-1) fixed intermediary delegates (the lowest
+                                     #   non-owner, non-guard speakers, disjoint from the root)
+                                     #   stack between base and apex: base -> B_{d-1} -> ... ->
+                                     #   B_1 -> A, the meta-tribute share m taken at EVERY link
+                                     #   (m^depth decay to the root). The tooth gates only the
+                                     #   BASE hop (owner->apparatus); intermediary hops are
+                                     #   unconditional internal routing. Each intermediary keeps
+                                     #   (1-m) of what it forwards => a middle-management strata.
+                                     # Read ONLY when delegate_on; d<=1 leaves every anchor bit-
+                                     # for-bit (the chain path is never entered).
 
 
 class Polis(AppropriationWorld):
@@ -299,6 +312,19 @@ class Polis(AppropriationWorld):
                 excl |= set(spk[:self._n_owners])
             cand = [o for o in spk if o not in excl]
             self._delegate_root = cand[0] if cand else (spk[0] if spk else None)
+        # Фаза 3: the remittance chain. depth 1 => no intermediaries (single hop, unchanged).
+        # depth d => the (d-1) lowest non-owner/non-guard speakers (disjoint from the root)
+        # form the chain [B_1 (nearest root) .. B_{d-1} (nearest base)]. Fixed at init, mirror
+        # of the apex rule; inert (empty) when off or depth<=1, so no anchor is disturbed.
+        self._delegate_depth = max(1, int(cfg.delegate_depth))
+        if self._delegate_on and self._delegate_depth > 1:
+            chexcl = (set(spk[:self._n_owners]) | set(self._extort_enforcer_ids)
+                      | set(self._delegate_enforcer_ids) | {self._delegate_root})
+            pool = [o for o in spk if o not in chexcl]
+            self._delegate_chain_ids = pool[:self._delegate_depth - 1]
+        else:
+            self._delegate_chain_ids = []
+        self._delegate_chain_recv = {}   # intermediary oid -> cumulative gross mass it handled
         self._delegate_m_income = {}     # per-tick owner->tribute income (set by _appropriate)
         self._delegate_marks = set()     # mark-ledger (b): defecting delegates barred (belief)
         self._delegate_flow = 0.0        # cumulative meta-tribute reaped by the root (kg)
@@ -513,6 +539,8 @@ class Polis(AppropriationWorld):
         m of its tribute income to the physically-absent root A — body→body, conserving. The
         tooth gates the remittance; a reputation-defector is marked (loses delegate standing).
         A reaps k cells at once without being present: the institutional bypass of presence."""
+        if self._delegate_depth > 1:               # Фаза 3: base -> intermediaries -> root
+            return self._delegate_chain(t)
         root = self._delegate_root
         live = {a.oid: a for a in self.pop}
         A = live.get(root)
@@ -543,6 +571,79 @@ class Polis(AppropriationWorld):
             self._delegate_events.append((t, oid, round(amount, 9)))
             self.log.emit(t, "delegate_remit", "individual", where=(B.i, B.j), actor=oid,
                           dm=amount, data={"root": root, "amount": round(amount, 6)})
+
+    def _delegate_chain(self, t):
+        """Фаза 3: the meta-tribute cascades base -> B_{d-1} -> ... -> B_1 -> root, share m
+        taken at EVERY link (body→body, conserving). The REVOKE tooth gates only the base hop
+        (owner->apparatus, marking a reputation-defector as before); the intermediary hops are
+        unconditional internal routing. Each intermediary keeps (1-m) of what it forwards, so a
+        middle-management strata emerges as depth grows while the root's take decays m^depth."""
+        root = self._delegate_root
+        live = {a.oid: a for a in self.pop}
+        A = live.get(root)
+        if A is None:                              # root dead -> the whole chain lapses
+            return
+        chain = self._delegate_chain_ids           # [B_1 (near root) .. B_{d-1} (near base)]
+        bottom = chain[-1]
+        Bbot = live.get(bottom)
+        chain_set = set(chain)
+        tooth = self.cfg.revoke_tooth
+        guard_cells = ({(a.i, a.j) for a in self.pop if a.oid in self._delegate_enforcer_ids}
+                       if tooth == "enforcer" else frozenset())
+        recv = {}                                  # this-tick gross received per chain node
+        # ---- base owners remit m·income to the bottom intermediary (tooth-gated) ----------
+        if Bbot is not None:
+            for oid in sorted(self._delegate_m_income):
+                if oid == root or oid in self._delegate_enforcer_ids or oid in chain_set:
+                    continue                       # apex, its guards, and intermediaries aren't base
+                B = live.get(oid)
+                if B is None:
+                    continue
+                if not self._delegate_remit(B, tooth, guard_cells):
+                    self._delegate_defections += 1
+                    if tooth == "reputation":
+                        self._delegate_marks.add(oid)
+                    continue
+                amount = self._delegate_m * self._delegate_m_income[oid]
+                if amount > B.body:
+                    amount = B.body
+                if amount <= 0.0:
+                    continue
+                B.body -= amount
+                Bbot.body += amount
+                recv[bottom] = recv.get(bottom, 0.0) + amount
+                self._delegate_events.append((t, oid, round(amount, 9)))
+                self.log.emit(t, "delegate_remit", "individual", where=(B.i, B.j), actor=oid,
+                              dm=amount, data={"root": root, "via": bottom,
+                                               "amount": round(amount, 6)})
+        # ---- intermediaries forward m of what they got, bottom -> top (unconditional) -----
+        for k in range(len(chain) - 1, -1, -1):    # child indices are > parent, so process down
+            node = chain[k]
+            got = recv.get(node, 0.0)
+            if got > 0.0:
+                self._delegate_chain_recv[node] = self._delegate_chain_recv.get(node, 0.0) + got
+            N = live.get(node)
+            if N is None or got <= 0.0:
+                continue
+            parent_oid = root if k == 0 else chain[k - 1]
+            P = live.get(parent_oid)
+            if P is None:                          # broken link -> the mass stays at this node
+                continue
+            amount = self._delegate_m * got
+            if amount > N.body:
+                amount = N.body
+            if amount <= 0.0:
+                continue
+            N.body -= amount
+            P.body += amount
+            if parent_oid == root:
+                self._delegate_flow += amount      # only mass reaching the apex is A_flow
+            else:
+                recv[parent_oid] = recv.get(parent_oid, 0.0) + amount
+            self._delegate_events.append((t, node, round(amount, 9)))
+            self.log.emit(t, "delegate_remit", "individual", where=(N.i, N.j), actor=node,
+                          dm=amount, data={"root": root, "to": parent_oid,
+                                           "amount": round(amount, 6)})
 
     def _matter(self):
         # FIRST extension of the tower's conservation law in 28 modules: artifact mass is
