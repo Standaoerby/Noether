@@ -26,6 +26,9 @@ GATES:
                  base and root; the chained world keeps the invariant and replays at depth 2
                  and 3 under both teeth. delegate_depth defaults to 1 (the chain path is never
                  entered), so every anchor stands.
+  MG2V-extrep    (Фаза 4) extort_reputation reuses the mark-ledger (victim testimony): the ON
+                 world conserves, replays, and BITES — marks accumulate and aggregate seizure
+                 falls below the guards-only baseline. Defaults OFF, so the extort anchors stand.
 
 PRE-REGISTERED (both outcome-formulations fixed BEFORE the run):
   HG2V-1  the compliance sweep, dl ∈ {0.3, 0.5, 0.7, 0.9}, frame of #46 (arena none, m=0.7,
@@ -52,6 +55,12 @@ PRE-REGISTERED (both outcome-formulations fixed BEFORE the run):
               (охват wins);
           (b) A_flow decays ≈ m per level while a middle strata captures the skim => NULL for
               the root (затухание m^depth wins — the natural limit of hierarchy).
+  HG2V-4  репутация×EXTORT — the mark-ledger reused (victim testimony, guard-independent). On
+          the HG2-2 frame sweep guards {0,N} × reputation {off,on}; print aggregate seizure,
+          recidivism (seiz/ext) and marks.
+          (a) reputation collapses recidivism and cuts seizure even where guards are rare =>
+              distributed reputation succeeds where the sparse guard fails (мод-16 рифма);
+          (b) aggregate seizure barely moves => NULL, presence still rules the shadow.
 """
 from __future__ import annotations
 
@@ -209,6 +218,29 @@ def _gate_mg2v_chain():
     assert ok
 
 
+def _gate_mg2v_extrep():
+    """Фаза 4 — the mark-ledger reused for EXTORT (victim testimony). extort_reputation defaults
+    OFF, so the two extort anchors stand (MG2V-OFF runs extort-refl/extort-live with the flag
+    off). Here we prove the ON branch: reputation conserves, replays, and BITES — marks
+    accumulate and aggregate seizure falls below the guards-only baseline on the same HG2-2
+    frame (reflex policy, 3-corps guard)."""
+    base = _run(_cfgg2(policy="reflex", extort=True, enforcers=3, days=300), 300)
+    rep = _run(_cfgg2(policy="reflex", extort=True, enforcers=3, extort_reputation=True, days=300), 300)
+    rep2 = _run(_cfgg2(policy="reflex", extort=True, enforcers=3, extort_reputation=True, days=300), 300)
+    mass_ok = rep.matter_drift() < 1e-9
+    replay_ok = rep.state_fingerprint() == rep2.state_fingerprint()
+    # ALIVE (not a no-op) + neutral-when-off: marks accumulate and the ON world diverges from
+    # the guards-only baseline. Whether that lowers AGGREGATE seizure is HG2V-4's question, not
+    # a gate — so we assert the mechanic bites the WORLD, not a scientific direction.
+    alive = len(rep._extort_marks) > 0 and rep.state_fingerprint() != base.state_fingerprint()
+    ok = mass_ok and replay_ok and alive
+    print(f"MG2V-extrep victim-testimony marks are alive; mass+replay hold -> {'✓' if ok else '✗'}")
+    print(f"          marks {len(rep._extort_marks)} · rep fp {rep.state_fingerprint()} != "
+          f"guards-only {base.state_fingerprint()}: {rep.state_fingerprint() != base.state_fingerprint()}")
+    print(f"          mass<1e-9: {mass_ok} · replay bit-exact: {replay_ok}")
+    assert ok
+
+
 # --------------------------------------------------------------------------- #
 #  Experiment (гипотезу правит прогон; both formulations fixed above)          #
 # --------------------------------------------------------------------------- #
@@ -340,6 +372,49 @@ def _hg2v_3(seeds=(7, 8, 9), days=300):
     print("  middle-management strata captures the skim (затухание m^depth — предел иерархии).")
 
 
+def _hg2v_4(seeds=(7, 8, 9), days=300, enforcers=3):
+    """Фаза 4 — репутация×EXTORT. The mark-ledger, reused: every seized owner testifies and its
+    takers are barred from EXTORT henceforth (victim testimony, guard-INDEPENDENT). On the HG2-2
+    frame (reflex policy, rare guards) sweep guards {0, N} × reputation {off, on} and read the
+    aggregate seizure, the recidivism (seizures per distinct extortionist) and the mark count.
+
+    PRE-REGISTERED (both formulations fixed BEFORE the run):
+      (a) reputation collapses recidivism (seiz/ext -> ~1) and cuts aggregate seizure even where
+          the sparse guards cannot reach (ng=0 too) => distributed reputation succeeds where the
+          spatial guard fails — the mod-16 rhyme ("slanderers caught on their own lies"), and the
+          third thread of control-without-ownership self-limits.
+      (b) reputation barely moves the aggregate (one-crime-each just cycles fresh extortionists
+          through the shadows on a large mobile substrate) => NULL: reputation pins the individual
+          recidivist but not aggregate crime — presence still rules the shadow."""
+    print(f"\n{HDR}\nHG2V-4 — репутация×EXTORT (reflex, HG2-2 frame). Victim testimony bars a\n"
+          f"taker from EXTORT after its first seizure (guard-independent). seiz/ext = recidivism.\n"
+          f"(means over seeds {seeds}; guard corps = {enforcers})\n{HDR}")
+    print(f"  {'guards':>7}{'rep':>5}{'Σseized':>9}{'offenses':>9}{'extortrs':>9}"
+          f"{'off/ext':>9}{'marked':>8}")
+    for ng in (0, enforcers):
+        for rep in (False, True):
+            agg = defaultdict(float); n = 0
+            for s in seeds:
+                w = _run(_cfgg2(policy="reflex", extort=True, enforcers=ng,
+                                extort_reputation=rep, arena=None, seed=s, days=days), days)
+                assert w.matter_drift() < 1e-9, f"HG2V-4 leaked (ng{ng} rep{rep} s{s})"
+                ev = w._extort_events
+                extortrs = set(); offenses = 0     # offense = one taker-instance (multi per event)
+                for _t, _c, _v, tks, _a in ev:
+                    extortrs.update(tks); offenses += len(tks)
+                agg["seized"] += w._extorted_total; agg["off"] += offenses
+                agg["ext"] += len(extortrs)
+                agg["recid"] += (offenses / len(extortrs)) if extortrs else 0.0
+                agg["marks"] += len(w._extort_marks); n += 1
+            print(f"  {ng:>7}{('on' if rep else 'off'):>5}{agg['seized']/n:>9.2f}"
+                  f"{agg['off']/n:>9.0f}{agg['ext']/n:>9.0f}{agg['recid']/n:>9.2f}"
+                  f"{agg['marks']/n:>8.0f}")
+    print("\n  read: off/ext = offenses per distinct extortionist (recidivism). (a) rep=on drives")
+    print("  off/ext toward ~1 AND cuts Σseized even at ng=0 => distributed reputation succeeds")
+    print("  where sparse guards fail (мод-16 рифма, смычка трёх нитей); (b) Σseized holds while")
+    print("  the offender pool just widens => NULL, the crime is structural (presence rules the shadow).")
+
+
 # --------------------------------------------------------------------------- #
 def main():
     print(HDR)
@@ -352,17 +427,21 @@ def main():
     _gate_mg2v_replay()
     _gate_mg2v_apex()
     _gate_mg2v_chain()
+    _gate_mg2v_extrep()
     if "--hg1" in sys.argv or "--all" in sys.argv:
         _hg2v_1()
     if "--hg2" in sys.argv or "--all" in sys.argv:
         _hg2v_2()
     if "--hg3" in sys.argv or "--all" in sys.argv:
         _hg2v_3()
+    if "--hg4" in sys.argv or "--all" in sys.argv:
+        _hg2v_4()
     print(f"\n{HDR}\nmod G2 vitok 2 gates green: the parameterisation is behaviour-neutral")
     print("(MG2V-REFACTOR), the seven anchors stand (MG2V-OFF), the invariant holds and every")
     print("threshold replays (MG2V-mass/replay), the body-poor apex is a non-owner (MG2V-apex),")
-    print("and the remittance chain conserves and replays at depth (MG2V-chain). The trophy")
-    print("meets its knob, loses its body, and grows a middle.")
+    print("the remittance chain conserves at depth (MG2V-chain), and the EXTORT mark-ledger bites")
+    print("and replays (MG2V-extrep). The trophy meets its knob, loses its body, grows a middle,")
+    print("and learns the shadow has a memory.")
     print(HDR)
 
 

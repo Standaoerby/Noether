@@ -153,6 +153,14 @@ class PolisConfig:
     extort_guard_everywhere: bool = False  # saturated surveillance: the gate is closed on
                                      # EVERY cell => EXTORT never fires (gate MG2-illegit:
                                      # a fully-guarded world is byte-identical to no verb)
+    extort_reputation: bool = False  # vitok-2 Фаза 4 — the mark-ledger, reused for EXTORT.
+                                     # OFF (default) => inert, every extort anchor bit-for-bit.
+                                     # ON => victim testimony: every owner seized from marks its
+                                     # takers (guard-INDEPENDENT, deterministic). A marked pawn
+                                     # loses the EXTORT affordance henceforth (одно преступление,
+                                     # затем бан) — so recidivism is reputationally self-limited
+                                     # where the sparse guard corps (HG2-2) cannot reach. The
+                                     # mark costs ONLY EXTORT (delegation/ownership untouched).
     # mod G2 (Фаза 2) — DELEGATE / REVOKE: the michelsian hole. A root A holds a delegation
     # RIGHT over the tribute-collecting owners (delegates B); each tick a delegate remits a
     # share m of the tribute it collected up to A (body→body, conserving) — so A reaps k
@@ -289,6 +297,9 @@ class Polis(AppropriationWorld):
                                      if self._extort_on else set())
         self._extort_cache_t = -1        # per-tick position cache (positions fixed within a tick)
         self._extort_cache = {}          # cell -> (frozenset owner_oids present, guard_present)
+        # Фаза 4: the mark-ledger reused for EXTORT (victim testimony). Inert unless ON.
+        self._extort_reputation = bool(cfg.extort_reputation) and self._extort_on
+        self._extort_marks = set()       # oids barred from EXTORT after being reported by a victim
         # mod G2 (DELEGATE / REVOKE): the apex A and its guard caste (disjoint from the owner
         # block AND the extort guards, so the castes never overlap). OFF => no root => the
         # remittance seam is a no-op and _appropriate delegates straight to canon (MG2D-OFF).
@@ -452,6 +463,8 @@ class Polis(AppropriationWorld):
             return ()
         if a.oid in owners or a.oid in self._extort_enforcer_ids:
             return ()
+        if self._extort_reputation and a.oid in self._extort_marks:
+            return ()                    # Фаза 4: marked (reported by a victim) -> barred henceforth
         return (EXTORT,)
 
     def _extort(self, t):
@@ -475,7 +488,8 @@ class Polis(AppropriationWorld):
             takers = [a for a in sorted(members, key=lambda x: x.oid)
                       if a.oid not in owners_oids
                       and a.oid not in self._extort_enforcer_ids
-                      and it.allows(a.oid, EXTORT)]          # confirmed by the intent layer
+                      and not (self._extort_reputation and a.oid in self._extort_marks)
+                      and it.allows(a.oid, EXTORT)]          # marked (Фаза 4) & intent-confirmed
             if not takers:
                 continue
             T = 0.0
@@ -500,6 +514,12 @@ class Polis(AppropriationWorld):
             self.log.emit(t, "extort", "individual", where=cell, actor=takers[0].oid, dm=T,
                           data={"victims": sorted(owners_oids),
                                 "takers": [tk.oid for tk in takers], "amount": round(T, 6)})
+            if self._extort_reputation:
+                # Фаза 4: the seized owner testifies — every taker on this cell is marked and
+                # barred from EXTORT henceforth (belief-only; no mass moves). Guard-independent,
+                # so reputation reaches the shadows the sparse guard corps (HG2-2) cannot.
+                for tk in takers:
+                    self._extort_marks.add(tk.oid)
 
     # ---- mod G2: DELEGATE / REVOKE — the apex reaps k cells without presence ---- #
     def _appropriate(self):
