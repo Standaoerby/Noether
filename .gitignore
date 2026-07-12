@@ -27,3 +27,4 @@ stage3/clive_archive/
 # Glass-Polis data package — regenerable by `py stage3/viz_export.py` (~8 MB); the
 # renderer (viz/glass/index.html) and exporter are committed, the data is not.
 viz/glass/data/
+stage3/longrun_out/
