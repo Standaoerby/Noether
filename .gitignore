@@ -27,4 +27,7 @@ stage3/clive_archive/
 # Glass-Polis data package — regenerable by `py stage3/viz_export.py` (~8 MB); the
 # renderer (viz/glass/index.html) and exporter are committed, the data is not.
 viz/glass/data/
+# split-screen presets (tooth_none/tooth_rep/ratchet_*) — regenerable from the
+# commands in viz/glass/README.md (§Пресеты), megabytes each, not committed.
+viz/glass/presets/
 stage3/longrun_out/
