@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-12 — longrun audit (T=3000)
+
+Read-only харнесс `stage3/run_longrun.py`, 8 миров башни + 5 конфигураций Polis, арена none. **Главный NULL: тепловой смерти нет** — ни вымирания, ни цикла, ни заморозки ни в одном из 13 миров к T=3000 (труп→soil→растение: рецикл держит миры живыми до горизонта, масса сохраняется). Drift плоский **7.28e-12** от T=300 к 3000 (нет численной деградации). Каталог: [`stage3/LONGRUN_AUDIT.md`](stage3/LONGRUN_AUDIT.md). Найдено (устойчиво на 3 сидах): dead-oid leak `_extort_marks` (×255 к живой pop — кандидат-фикс), institution-рампа (owner-set замерзает, pop→12), inheritance-дилюция на вольной арене (owner_share ~0.03, против box6-нарратива «династия концентрирует»). Гейты **LR-mass / LR-repro** зелёные; `verify_all` ALL PASS до и после (аудит read-only по построению). PR #55.
+
+## 2026-07-11/12 — Stage-3 G2 виток 2 (Фазы 1–4)
+
+Свип комплаенса (трофей условен: проводимость репутационного сдерживания ∝ комплаентной базе; лаффер — пик изъятия при dl0.7 выше god-потолка, пирог душится ×11). Телесно-бедный апекс — **NULL**: у потока нет вместилища кроме тела (owner_gap 0.22 < auto 0.32), власть остаётся телесной. Глубина цепи — **NULL**: иерархия производит среднее звено, корень затухает ~m^depth (558→310→147), посредники капитализируют скимминг. Репутация×EXTORT — **расщеплённый вердикт**: индивидуальный рецидив 24→ровно 1.00 без стражей, но совокупная преступность структурна (пул грабителей утраивается 4112→12360, Σseized не падает). Канон не тронут; все MG2V-гейты + verify_all зелёные. PR #47/#52/#53/#54.
+
+## 2026-07-09/10 — viz β-3 «Власть глазами»
+
+Слои власти в Glass Polis: remit-поток к отсутствующему корню, extort, marks-брендинг, guard-тень, deny-хитмап (дефолт OFF — старый фильм цел). `--events agg` (агрегация ×47, витрина 9.1 МБ), split-скрин с пресетами (`tooth_none/rep`, `ratchet_*`), фигура power_dose, agg-режим хроники без «undefined» + бейдж режима, no-silent-load сплита. Гейты V3-FP/OLD/AGG/NUM/AGG-CHRON зелёные. PR #48 + #51.
+
+## 2026-07-08/09 — Stage-3 mod G / G2 (виток 1)
+
+Интент-слой: триггер→интент→взаимодействие→результат, 7 вербов, политики off/reflex/utility/live. EXTORT — страту строит **селекция хищников**, не право (изъятие без титула, в тени присутствия). DELEGATE/REVOKE — **михельсова дыра**: аппарат жнёт k клеток без присутствия; зуб REVOKE решает — репутационный зуб открывает ~92% god-потока без субстрат-чита, пространственный «черепашится» к присутствию стража. Канон read-only; якоря целы. PR #43/#45/#46.
+
 ## 2026-06-26 — vectorize the shared per-cell pooling pass (`sim_pool`) — pure speed, bit-identical
 
 Factored the O(co-located² × candidates) triple loop that `sim_warn` and `sim_evidence` each ran in `_social_exchange` into one shared, numpy-vectorized pass (`sim_pool.py`). **Behaviour-preserving optimization** — every protected fingerprint holds bit-for-bit; no rule, metric, or invariant changed. This is the one authorized reason to touch the locked reputation modules; the verdict is by **output-fingerprint reproduction**, not file byte-identity (their bytes change).
