@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 import numpy as np
 
-from sim_eventlog import EventLog
+from sim_eventlog import EventLog, DEATH
 from stage3.polis import Polis
 from stage3.run_artifact_f import _cfg, _run
 from stage3.run_artifact_f3 import MFV3_OFF_ANCHOR_STORECAP, MFV3_OFF_ANCHOR_VESSEL
@@ -203,19 +203,163 @@ def _hh(seeds=(7, 8, 9), days=700):
 
 
 # --------------------------------------------------------------------------- #
+#  PHASE 2 — the enforcer on debt (HD1/HD2) + robustness довески                #
+#                                                                             #
+#  HD1 (MAIN): debt + coercion => a creditor stratum? (a) topGap>1 => debt is  #
+#      power ONLY with an enforcer — power = claim × coercion 🔖🔖 · (b) NULL:  #
+#      even force does not make debt power — the body rules absolutely.         #
+#  HD2: does investment credit revive? (a) the repayment guarantee births      #
+#      investment lending (the HHB2 riddle was RISK) · (b) investment=0 even    #
+#      with the enforcer => it was surplus/motive, not risk (leaves line H).    #
+# --------------------------------------------------------------------------- #
+from stage3.run_artifact_g import _cfgg as _cfgg_debt          # noqa: E402  (debt substrate)
+
+
+def _cfghd(r=0.3, enforce=False, seed=7, days=700, **over):
+    """Debt on the H2-bis substrate (claim inherits, _house, honest overdue) + the enforcer."""
+    return _cfgg_debt(policy="off", arena=None, days=days, seed=seed, store_access="maker",
+                      debt_on=True, debt_r=r, debt_claim_inherits=True, debt_house=True,
+                      debt_overdue_ticks=10, debt_enforce_on=enforce, **over)
+
+
+class _EA:                                                     # mock pawn for the constructed K5
+    __slots__ = ("oid", "body", "i", "j", "gene")
+
+    def __init__(self, oid, body, i=0, j=0):
+        self.oid = oid; self.body = body; self.i = i; self.j = j; self.gene = 290.0
+
+
+class _EW:
+    def __init__(self, pop):
+        self.t = 1; self.log = EventLog(); self.soil = np.zeros((14, 14)); self.pop = pop
+        self._artifacts = None
+
+    def owner_ids(self):
+        return set()
+
+
+def _gate_mh3_enf():
+    """MH3-ENF-OFF (enforce off => the anchor stands) + non-no-op (enforce_on diverges and fires)
+    + the constructed MH3-ENF-K5 (a forced extraction NEVER pushes the body below DEATH; the
+    remainder stays a claim)."""
+    from stage3.debt import DebtLedger
+    from stage3.polis import PolisConfig
+    off = _run(_cfgg2d(tooth="reputation", days=300), 300)
+    anchor_ok = off.state_fingerprint() == MG2V_REPUTATION_ANCHOR
+    wf = _run(_cfghd(r=0.3, enforce=False, days=500), 500)
+    wt = _run(_cfghd(r=0.3, enforce=True, days=500), 500)
+    diverges = (wf.state_fingerprint() != wt.state_fingerprint()) and wt._debt.n_enforced > 0
+    # constructed K5: an overdue debtor on the edge (body 0.06, DEATH 0.05), a deme of 3 (majority)
+    d = DebtLedger(PolisConfig(debt_on=True, debt_enforce_on=True, debt_enforce_frac=0.5,
+                               debt_enforce_cost=0.1))
+    edge = _EA(1, 0.06); cr = _EA(2, 5.0); by = _EA(3, 1.0)
+    w = _EW([edge, cr, by]); d.debt[(2, 1)] = 1.0; d.principal[1] = 0.5; d.stage[1] = 2
+    d._enforce(w, 1, {1: edge, 2: cr, 3: by})
+    k5_ok = edge.body >= DEATH - 1e-12 and d.n_enforced > 0 and (2, 1) in d.debt  # remainder stays
+    ok = anchor_ok and diverges and k5_ok
+    print(f"MH3-ENF-OFF/K5 anchor + non-no-op + forced extraction respects DEATH -> {'✓' if ok else '✗'}")
+    print(f"          anchor {anchor_ok} · enforce diverges & fires ({wt._debt.n_enforced}): {diverges}")
+    print(f"          constructed edge body {edge.body:.4f} >= DEATH {DEATH} · remainder stays: {k5_ok}")
+    assert ok
+
+
+def _gate_mh_enf_massledger():
+    from stage3.polis import Polis
+    drift_ok = replay_ok = True
+    worst = 0.0
+    for r in (0.3, 0.5):
+        a = _run(_cfghd(r=r, enforce=True, days=400), 400)
+        b = _run(_cfghd(r=r, enforce=True, days=400), 400)
+        drift_ok = drift_ok and a.matter_drift() < 1e-9
+        replay_ok = replay_ok and a.state_fingerprint() == b.state_fingerprint()
+        w = Polis(EventLog(), _cfghd(r=r, enforce=True, days=300))
+        for _ in range(300):
+            w.step()
+            worst = max(worst, abs(w._debt.ledger_identity_residual()))
+    ok = drift_ok and replay_ok and worst < 1e-6
+    print(f"MH-mass/replay/ledger on the enforce path -> {'✓' if ok else '✗'}")
+    print(f"          mass<1e-9: {drift_ok} · replay: {replay_ok} · ledger |resid|<1e-6 ({worst:.1e})")
+    assert ok
+
+
+def _hd(seeds=(7, 8, 9), days=700):
+    from stage3.run_artifact_f2 import _run_with_history
+    print(f"\n{HDR}\nHD1/HD2 — the enforcer on debt (claim_inherits=True, _house on). topGap =\n"
+          f"repayments-received / creditor body integral; HD1: >1 => power = claim × coercion.\n"
+          f"(means over seeds {seeds}; pop column per the Phase-1 acceptance довесок)\n{HDR}")
+    print(f"  {'enforce':>8}{'r':>5}{'loans':>7}{'h/i/inv':>10}{'enforced':>9}{'refused':>8}"
+          f"{'topGap':>8}{'Gini':>7}{'meanBody':>9}{'pop':>6}")
+    for enf in (False, True):
+        for r in (0.3, 0.5):
+            agg = defaultdict(float); n = 0
+            for s in seeds:
+                w, integral, _t = _run_with_history(_cfghd(r=r, enforce=enf, seed=s, days=days), days)
+                assert w.matter_drift() < 1e-6, f"HD leaked (enf{enf} r{r} s{s})"
+                d = w._debt
+                recv = defaultdict(float)
+                for e in d.events:
+                    if e[1] in ("debt_pay", "debt_enforce") and e[2] is not None:
+                        recv[e[2]] += e[4]
+                gaps = [recv[c] / integral[c] for c in recv if integral.get(c, 0.0) > 1e-9]
+                topgap = max(gaps) if gaps else float("nan")
+                agg["loans"] += d.n_loans; agg["enf"] += d.n_enforced; agg["ref"] += d.n_enforce_refused
+                agg["h"] += d.reason_counts["hunger"]; agg["i"] += d.reason_counts["income_drop"]
+                agg["inv"] += d.reason_counts["investment"]
+                agg["gap"] += (topgap if topgap == topgap else 0.0); agg["gapn"] += (1 if topgap == topgap else 0)
+                agg["gini"] += _gini([a.body for a in w.pop])
+                agg["mb"] += float(np.mean([a.body for a in w.pop])) if w.pop else 0.0
+                agg["pop"] += len(w.pop); n += 1
+            gapm = (agg["gap"] / agg["gapn"]) if agg["gapn"] else float("nan")
+            reasons = f"{agg['h']/n:.0f}/{agg['i']/n:.0f}/{agg['inv']/n:.0f}"
+            print(f"  {str(enf):>8}{r:>5.1f}{agg['loans']/n:>7.0f}{reasons:>10}{agg['enf']/n:>9.0f}"
+                  f"{agg['ref']/n:>8.0f}{gapm:>8.2f}{agg['gini']/n:>7.3f}{agg['mb']/n:>9.3f}{agg['pop']/n:>6.0f}")
+    print("\n  read HD1: topGap>1 with enforce => debt becomes power (else NULL, body rules).")
+    print("  HD2: inv column rises with enforce => the repayment guarantee revived investment")
+    print("  (risk was the block); inv=0 still => supply/motive, not risk — leaves line H.")
+
+
+def _hp3_robust(m=5.0, days=700):
+    """Phase-1 acceptance довесок (i): re-check the HP3 coalition signal on seeds 7-16 (10 seeds),
+    coalition vs the no-punishment base, one m — coalR is only meaningful ABOVE the base (the
+    oid-parity split has its own ~1.13 asymmetry)."""
+    seeds = tuple(range(7, 17))
+    print(f"\n{HDR}\nHP3-robust (довесок i) — coalition vs base, m={m:.0f}, seeds 7-16 (n={len(seeds)}).\n"
+          f"the honest signal is coalR(coalition) − coalR(base); the raw >1 is naive.\n{HDR}")
+    out = {}
+    for tag, pon, strat in (("base(no-punish)", False, "min_contrib"), ("coalition", True, "coalition")):
+        crs = []
+        for s in seeds:
+            w = _run(_cfgh3(m=m, visibility="signed", punish_on=pon, strategy=strat, seed=s, days=days), days)
+            cr = _coalition_ratio(w)
+            if cr == cr:
+                crs.append(cr)
+        out[tag] = (sum(crs) / len(crs), crs)
+        print(f"  {tag:>16}: coalR mean {out[tag][0]:.3f}  (min {min(crs):.2f} max {max(crs):.2f})")
+    delta = out["coalition"][0] - out["base(no-punish)"][0]
+    print(f"\n  honest signal: coalR(coalition) − coalR(base) = {delta:+.3f}  "
+          f"=> {'candidate holds' if delta > 0.02 else 'washes out (base asymmetry)'} on {len(seeds)} seeds")
+
+
+# --------------------------------------------------------------------------- #
 def main():
     print(HDR)
-    print("mod H3 Phase 1 — the public good + the punishment organ (coercion, the last link).")
+    print("mod H3 — Phase 1 (public good + punishment) & Phase 2 (the enforcer on debt).")
     print(HDR)
     _gate_mh3_off()
     _gate_mh3_cons()
     _gate_mh3_punish()
     _gate_mh_mass_replay()
+    _gate_mh3_enf()
+    _gate_mh_enf_massledger()
     if "--hh" in sys.argv or "--all" in sys.argv:
         _hh()
-    print(f"\n{HDR}\nmod H3 Phase 1 gates green: OFF-neutral (MH3-OFF), the pool is conserving")
-    print("(MH3-CONS), the sanction is real & majority-backed (MH3-PUNISH), and mass/replay hold.")
-    print("The organ is built; the sweep asks whether a captured sanction pierces the body ceiling.")
+    if "--hd" in sys.argv or "--all" in sys.argv:
+        _hd()
+    if "--robust" in sys.argv or "--all" in sys.argv:
+        _hp3_robust()
+    print(f"\n{HDR}\nmod H3 gates green: Phase 1 (MH3-OFF/CONS/PUNISH) + Phase 2 (MH3-ENF-OFF/K5,")
+    print("mass/replay/ledger). The organ enforces debt; the sweep asks HD1 — power = claim ×")
+    print("coercion — the final question of line H.")
     print(HDR)
 
 

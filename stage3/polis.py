@@ -255,6 +255,15 @@ class PolisConfig:
     # True => a creditor on a DIRS-adjacent cell may also lend, so credit has more chances to
     # meet — the test of whether the channel was the binding constraint (HHB2). Non-no-op.
     debt_copresence: bool = False
+    # mod H3 Phase 2 — the ENFORCER on debt. An overdue claim (K4 stage >= 2) is enforced by
+    # FORCE — mass extracted from the debtor's body toward the creditor — but ONLY when the
+    # co-located deme collectively sanctions it (majority-of-present, the Phase-1 organ), never
+    # automatically. K5 is respected: the forced extraction is capped to leave the body at
+    # DEATH+ (coercion takes mass, not life; the remainder stays as a claim). OFF => byte-
+    # identical. HD1: does debt become power = claim × coercion?
+    debt_enforce_on: bool = False
+    debt_enforce_frac: float = 0.2   # fraction of the debtor's body extracted per enforcement
+    debt_enforce_cost: float = 0.1   # friction: this fraction of the extracted mass -> soil
     # mod H3 — the public good + the punishment organ (WO_stage3-mod-H3). All OFF => byte-
     # identical. See stage3/publicgood.py. m calibrated in Phase 0 (n≈5 => sweep 1/5/10).
     pg_on: bool = False          # the deme's common field (contribution -> soil -> m·synergy)
