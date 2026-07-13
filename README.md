@@ -26,7 +26,7 @@ Ten modules, bottom to top. Each is **self-verifying**: its demo ends in `assert
 | 6 | `sim_traits` | two genes: temp_opt + size (Bergmann) | final sCorr −0.669 | 23.4 |
 | 7 | `sim_pareto` | explicit Pareto front + domination | mean(H·C)=1.0000±6.7e-17; Bergmann −0.914; 94% scrambled dominated | 18.5 |
 | 8 | `sim_portfolio` | portfolio effect (variance-averaging) | indep buffer 3.8×, sync 1.0×; sqrt-law gap ≤2.2% | 1.3 |
-| 9 | `sim_eventlog` | universal event log (faithful, queryable) | matter 0.0; log replays the sim exactly; 18945 events | 2.9 |
+| 9 | `sim_eventlog` | universal event log (faithful, queryable) | matter 0.0; log replays the sim exactly; 18510 events | 2.9 |
 | 10 | `sim_stage2` | a mind inside a pawn (typed, conserved, replayable) | matter ~1e-12; replay bit-identical; ON/OFF: mismatch 2.21→0.86 K, pop 31→102 | 2.3 |
 
 Beyond the base ten, `Code/` carries the **property arc** (appropriation, institution, inheritance, exclusion, trade, synthesis, legitimacy-probe) — the modules that measured *control through ownership*. The headline of that arc: **there is no super-additive concentration — tyranny is not emergent from summing institutions; power is a gradient, not a phase transition** (`Code/sim_*` + [`docs/module-tower.md`](docs/module-tower.md)). The canon subtree is fingerprint-anchored and never edited by later work.
@@ -89,6 +89,8 @@ Two levels, and they are not the same promise:
 
 - **Bitwise (bit-for-bit):** the `state_fingerprint` anchors and byte-identical stdout hold **only inside the locked environment** — **Python 3.13.4, NumPy 2.2.6, Windows 11** ([`requirements-lock.txt`](requirements-lock.txt)). This is what the `MG*/MH*/anchor` gates assert.
 - **Semantic:** on any other Python / NumPy / OS, the **conservation invariants and the scientific findings** still hold; the exact fingerprints may drift by float rounding. `requirements.txt` keeps `numpy>=1.26` for convenience, but the anchors are recorded against the exact pin above — so `>=` never contradicts the bit-for-bit claim: the claim is simply scoped to the lock.
+
+**Two levels of proof (S2).** Editable stage3 runners emit a machine-readable result with `--json` → `results/<runner>.result.json` (deterministic on a commit; git-ignored): a **`state_hash`** (the world's `state_fingerprint()` — the substrate is identical) and an **`event_hash`** (the same history was produced). Canon `sim_*` modules are not editable and keep the legacy **stdout-SHA256**, which only proves *"the program printed the same bytes twice"* — strictly weaker. `nightly.yml` uploads `results/*.json` as a build artifact.
 
 ## Repository layout
 

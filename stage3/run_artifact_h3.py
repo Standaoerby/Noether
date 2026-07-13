@@ -341,7 +341,26 @@ def _hp3_robust(m=5.0, days=700):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result for this runner (a canonical Phase-2
+    enforce world). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 500
+    w = _run(_cfghd(r=0.3, enforce=True, seed=seed, days=days), days)
+    d = w._debt
+    path = write_result("run_artifact_h3", w, seed=seed,
+                        invariants={"drift": w.matter_drift(),
+                                    "ledger_resid": d.ledger_identity_residual()},
+                        metrics={"loans": d.n_loans, "enforced": d.n_enforced,
+                                 "enforce_refused": d.n_enforce_refused,
+                                 "defaults": d.n_defaults, "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod H3 — Phase 1 (public good + punishment) & Phase 2 (the enforcer on debt).")
     print(HDR)

@@ -251,7 +251,25 @@ def _hh(seeds=(7, 8, 9), days=700):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (a canonical debt world). No timestamp."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 600
+    w = _run(_cfgh(r=0.5, days=days, seed=seed), days)
+    d = w._debt
+    path = write_result("run_artifact_h", w, seed=seed,
+                        invariants={"drift": w.matter_drift(),
+                                    "ledger_resid": d.ledger_identity_residual()},
+                        metrics={"loans": d.n_loans, "defaults": d.n_defaults,
+                                 "extort_marks": len(getattr(w, "_extort_marks", ())),
+                                 "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod H виток 1 — DEBT: power from consent, the first endogenous price, and bondage.")
     print(HDR)
