@@ -112,7 +112,8 @@ class PublicGood:
         contribs = {}
         C = 0.0
         for a in sorted(members, key=lambda x: x.oid):
-            c = self._prop(a.oid) * self.stake
+            p_used = self._prop(a.oid)
+            c = p_used * self.stake
             c = min(c, max(0.0, a.body - DEATH))
             if c > 0.0:
                 a.body -= c
@@ -120,6 +121,12 @@ class PublicGood:
                 C += c
             contribs[a.oid] = c
             round_c.append(c)
+            # name the contribution in the ledger (read-only APPEND: body/soil already moved
+            # above; this only records who gave how much this round — the substrate is untouched,
+            # the world fingerprint unchanged). Emitted always, so a free-rider's 0 is visible.
+            w.log.emit(t, "pg_contrib", "individual", where=cell, actor=a.oid, dm=-c,
+                       data={"amount": round(c, 6), "prop": round(p_used, 6),
+                             "round": self.n_rounds, "n": n, "visibility": self.visibility})
         # 2) SYNERGY: draw P = min(m·C, soil) back, split equally over the n present
         P = self.m * C
         avail = float(w.soil[i, j])
@@ -205,6 +212,11 @@ class PublicGood:
         self.punish_damage_total += dmg
         self.events.append((t, "pg_punish", tuple(sorted(a.oid for a in supporters))[:1] and supporters[0].oid,
                             target, round(dmg, 9), self.strategy))
+        # name each vote in the ledger (read-only APPEND: who backed the sanction against whom).
+        # Every present pawn but the victim supports the single deme strategy => a clean majority.
+        for a in sorted(supporters, key=lambda x: x.oid):
+            w.log.emit(t, "pg_vote", "individual", where=cell, actor=a.oid, dm=0.0,
+                       data={"target": target, "strategy": self.strategy, "round": self.n_rounds})
         w.log.emit(t, "pg_punish", "deme", where=cell, actor=target, dm=-dmg,
                    data={"strategy": self.strategy, "supporters": len(supporters),
                          "amount": round(dmg, 6)})

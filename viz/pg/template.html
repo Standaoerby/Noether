@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Общественное благо — эксперимент, разыгранный пешками</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#12151d; --panel2:#171b25; --ink:#e6e9f0; --dim:#8b93a7;
+    --line:#2a3040; --accent:#6cc5ff; --good:#39d98a; --bad:#ff5d6c; --gold:#ffcf5c;
+    --violet:#b98cff;
+    --anarchy:#8b93a7; --children:#39d98a; --teens:#b98cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 "Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
+  h1{font-size:22px;margin:0 0 2px;letter-spacing:.01em}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 14px}
+  .prov{display:inline-block;font-size:11px;color:var(--dim);border:1px solid var(--line);
+    border-radius:20px;padding:3px 10px;margin-left:8px;vertical-align:middle}
+  section{margin:16px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0 0 10px;font-weight:600}
+
+  /* rules */
+  .rules{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start}
+  .rules p{margin:0 0 8px}
+  .rules b{color:var(--ink)}
+  .rules .big{font-size:15px;color:var(--ink)}
+  .rules .c2{color:var(--gold)}
+  .goal{color:var(--accent);font-weight:600}
+  .coins{font-size:26px;letter-spacing:2px;white-space:nowrap}
+  details.tower{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+  details.tower summary{cursor:pointer;color:var(--dim);font-size:12px;list-style:none}
+  details.tower summary::before{content:"▸ ";color:var(--accent)}
+  details.tower[open] summary::before{content:"▾ "}
+  details.tower p{color:var(--dim);font-size:12px;margin:8px 0 0}
+  details.tower code{background:var(--panel2);padding:1px 5px;border-radius:4px;color:var(--ink)}
+
+  /* stepper */
+  .stepper{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step{width:38px;height:38px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);
+    color:var(--dim);font-size:15px;cursor:pointer;font-weight:600}
+  .step:hover{border-color:var(--accent)}
+  .step.on{border-color:var(--accent);color:var(--accent);background:rgba(108,197,255,.12)}
+  .step.finale{width:auto;padding:0 14px;color:var(--ink)}
+  .arrowhint{color:var(--dim);font-size:12px;margin-left:6px}
+  .arrowhint kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font:inherit;font-size:11px}
+
+  /* panels */
+  .panels{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;border-top:3px solid var(--edge)}
+  .panel .plabel{font-size:15px;font-weight:700}
+  .panel .psub{font-size:11px;color:var(--dim);margin-bottom:10px}
+  .panel[data-w=anarchy]{--edge:var(--anarchy)}
+  .panel[data-w=children]{--edge:var(--children)}
+  .panel[data-w=teens]{--edge:var(--teens)}
+  .panel[data-w=anarchy] .plabel{color:var(--anarchy)}
+  .panel[data-w=children] .plabel{color:var(--children)}
+  .panel[data-w=teens] .plabel{color:var(--teens)}
+
+  .bars{display:flex;align-items:flex-end;gap:3px;height:120px;padding:6px 2px 0;
+    border-bottom:1px solid var(--line);margin-bottom:4px}
+  .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;position:relative}
+  .bar .fill{width:100%;border-radius:4px 4px 0 0;background:var(--edge);min-height:2px;transition:height .18s ease}
+  .panel[data-w=anarchy] .bar .fill{background:var(--anarchy);opacity:.55}
+  .bar.punished .fill{background:var(--bad);box-shadow:0 0 0 2px var(--panel),0 0 0 3px var(--bad)}
+  .bar .oid{font-size:9px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
+  .bar.punished .oid{color:var(--bad);font-weight:700}
+  .bar .crown{position:absolute;top:-13px;font-size:10px}
+
+  .tline{font-size:12.5px;margin:8px 0 2px;min-height:20px}
+  .tline .amt{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600}
+  .burn{color:var(--bad)}
+  .stats{display:flex;gap:12px;font-size:12px;color:var(--dim);margin-top:6px;flex-wrap:wrap}
+  .stats b{color:var(--ink);font-variant-numeric:tabular-nums}
+
+  /* finale (scoped by id so the .step.finale button is not caught by this rule) */
+  #finale{display:none}
+  #finale.show{display:block}
+  .fgrid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
+  @media (max-width:880px){.fgrid{grid-template-columns:1fr}.panels{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:right;padding:7px 9px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
+  .ribbon{margin-top:6px}
+  .ribbon .row{display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;color:var(--dim)}
+  .ribbon .tno{color:var(--dim);width:46px}
+  .field{margin-top:10px}
+  .field td,.field th{text-align:left}
+  .caption{color:var(--dim);font-size:11px;margin-top:8px;font-style:italic}
+  .legend{display:flex;gap:16px;font-size:12px;margin:2px 0 8px;color:var(--dim);flex-wrap:wrap}
+  .legend span b{color:var(--ink)}
+  svg{display:block;width:100%;height:auto}
+  .axis{stroke:var(--line);stroke-width:1}
+  .gridln{stroke:var(--line);stroke-width:1;opacity:.4}
+  .alab{fill:var(--dim);font-size:10px}
+  .foot{color:var(--dim);font-size:11px;margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Общественное благо<span class="prov" id="prov">одна конкретная симуляция</span></h1>
+  <p class="sub">Полевой опыт из письма — дети и подростки в игре на общий банк — разыгран пешками.
+     Три мира из одного старта расходятся судьбами.</p>
+
+  <section class="card rules">
+    <div>
+      <p class="big"><b>У каждого 20 денег. 5 туров.</b> Каждый тур вы отдаёте сколько хотите
+        в <b>общий банк</b>. Банк увеличивается (×<b id="mmul">5</b>) и делится <b>поровну на всех</b> —
+        даже на тех, кто отдал 0.</p>
+      <p class="goal">Цель — остаться с наибольшей суммой.</p>
+      <p style="margin-top:10px"><span class="c2">Круг 2:</span> все ставки <b>подписаны</b>;
+        после тура <b>голосованием большинства</b> один игрок штрафуется на <b>20%</b>.</p>
+      <details class="tower">
+        <summary>как это устроено в башне</summary>
+        <p>Деньги — это <b>масса тела</b> пешки (нормировка: старт = 20 денег, один множитель
+          ×<span id="mmul2">20</span>). «Банк» — общий <code>soil</code> клетки; синергия тянет
+          из него <code>P = min(m·C, soil)</code> и делит поровну — физика сохранения, не магия
+          (масса не создаётся). Штраф сжигает 20% тела жертвы в почву. Механика неизменна —
+          это орган mod H3, Фаза 1; статистика по 10 сидам — в <code>WO_stage3-mod-H3.md</code>.</p>
+      </details>
+    </div>
+    <div style="text-align:center">
+      <div class="coins">🪙🪙🪙🪙</div>
+      <div style="color:var(--dim);font-size:11px;margin-top:4px">12 игроков · 5 туров</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="stepper" id="stepper"></div>
+  </section>
+
+  <section class="panels" id="panels"></section>
+
+  <section class="finale card" id="finale">
+    <h2>Наглядные результаты — кто выиграл и почему</h2>
+    <div class="legend" id="legend"></div>
+    <div class="fgrid">
+      <div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:4px">Суммарный вклад в банк по турам (деньги)</div>
+        <svg id="curves" viewBox="0 0 560 300" role="img" aria-label="Кривые вклада по трём мирам"></svg>
+        <p class="caption">Затухание анархии · удержание у детей · захват у подростков — та самая
+          диаграмма с рефлексии.</p>
+      </div>
+      <div>
+        <table id="summary">
+          <thead><tr><th>Мир</th><th>Макс</th><th>Средний</th><th>Банк Σ</th><th>Штрафов</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="ribbon" id="ribbon"></div>
+      </div>
+    </div>
+
+    <table class="field" id="field">
+      <thead><tr><th>Сравнение с полем</th><th>люди (письмо)</th><th>пешки (субстрат)</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="caption" id="fieldnote"></p>
+  </section>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script id="pg-data" type="application/json">/*__PG_DATA__*/</script>
+<script>
+const DATA = JSON.parse(document.getElementById('pg-data').textContent);
+const ORDER = DATA.order;
+const T = DATA.tours;
+let cur = 0;            // 0..T-1 tour index, or T = finale
+const $ = s => document.querySelector(s);
+
+document.getElementById('mmul').textContent = DATA.m;
+document.getElementById('mmul2').textContent = DATA.money_mult;
+document.getElementById('prov').textContent =
+  'одна конкретная симуляция · seed ' + DATA.seed + ' · числа из EventLog';
+
+// max contribution across everything -> a shared bar scale
+let barMax = 0;
+for (const k of ORDER) for (const t of DATA.worlds[k].tours)
+  for (const o of Object.values(t.contrib)) barMax = Math.max(barMax, o);
+barMax = barMax || 1;
+
+// ---- stepper ----
+const stp = document.getElementById('stepper');
+for (let r=0;r<T;r++){
+  const b=document.createElement('button');
+  b.className='step'; b.textContent=(r+1); b.dataset.r=r;
+  b.onclick=()=>go(r); stp.appendChild(b);
+  if (r<T-1){const s=document.createElement('span');s.textContent='→';s.style.color='var(--dim)';stp.appendChild(s);}
+}
+const fb=document.createElement('button');
+fb.className='step finale'; fb.textContent='Финал ✦'; fb.onclick=()=>go(T);
+stp.appendChild(fb);
+const hint=document.createElement('span');
+hint.className='arrowhint'; hint.innerHTML='листайте <kbd>←</kbd> <kbd>→</kbd>';
+stp.appendChild(hint);
+
+// ---- panels ----
+const pc = document.getElementById('panels');
+for (const k of ORDER){
+  const w=DATA.worlds[k];
+  const p=document.createElement('div');
+  p.className='panel'; p.dataset.w=k;
+  p.innerHTML=`<div class="plabel">${w.label}</div><div class="psub">${w.sublabel}</div>
+     <div class="bars" data-bars="${k}"></div>
+     <div class="tline" data-tline="${k}"></div>
+     <div class="stats" data-stats="${k}"></div>`;
+  pc.appendChild(p);
+}
+
+function renderTour(r){
+  for (const k of ORDER){
+    const w=DATA.worlds[k], t=w.tours[r];
+    const signed = k!=='anarchy';
+    const punT = t.punish ? t.punish.target : null;
+    const bars=document.querySelector(`[data-bars="${k}"]`);
+    bars.innerHTML='';
+    for (const oid of w.pawns){
+      const c=t.contrib[String(oid)]||0;
+      const h=Math.round(100*c/barMax);
+      const punished = (punT===oid);
+      const d=document.createElement('div');
+      d.className='bar'+(punished?' punished':'');
+      d.title=(signed?('игрок '+oid):'аноним')+': отдал '+c.toFixed(1);
+      d.innerHTML=`<div class="fill" style="height:${h}%"></div>`+
+        `<div class="oid">${signed?oid:'•'}</div>`+
+        (punished?'<div class="crown">🔥</div>':'');
+      bars.appendChild(d);
+    }
+    const tl=document.querySelector(`[data-tline="${k}"]`);
+    let s=`В банк: <span class="amt">${t.total_contrib.toFixed(1)}</span> → вернулось <span class="amt">${t.bank_payout.toFixed(1)}</span> поровну`;
+    if (t.punish){
+      s+=` · <span class="burn">🔥 игрок ${t.punish.target}, ${t.punish.votes} голосов — ${t.punish.note}</span>`;
+    } else if (signed===false){
+      s+=` · <span style="color:var(--dim)">никто не наказан (аноним)</span>`;
+    }
+    tl.innerHTML=s;
+    const st=document.querySelector(`[data-stats="${k}"]`);
+    const monies=Object.values(t.money);
+    const mx=Math.max(...monies), mn=monies.reduce((a,b)=>a+b,0)/monies.length;
+    st.innerHTML=`счёт: макс <b>${mx.toFixed(0)}</b> · средний <b>${mn.toFixed(0)}</b>`;
+  }
+}
+
+// ---- finale curves ----
+function drawCurves(){
+  const svg=document.getElementById('curves');
+  const W=560,H=300,L=44,R=90,Tp=14,B=34;
+  const x0=L, x1=W-R, y0=H-B, y1=Tp;
+  let ymax=0;
+  for (const k of ORDER) for (const v of DATA.worlds[k].curve) ymax=Math.max(ymax,v);
+  ymax=Math.ceil(ymax/10)*10 || 10;
+  const xat=i=>x0+(x1-x0)*i/(T-1);
+  const yat=v=>y0+(y1-y0)*v/ymax;
+  let h='';
+  // grid + y labels
+  for (let g=0;g<=ymax;g+=Math.max(10,Math.round(ymax/5/10)*10)){
+    h+=`<line class="gridln" x1="${x0}" y1="${yat(g)}" x2="${x1}" y2="${yat(g)}"/>`;
+    h+=`<text class="alab" x="${x0-6}" y="${yat(g)+3}" text-anchor="end">${g}</text>`;
+  }
+  // x labels
+  for (let i=0;i<T;i++)
+    h+=`<text class="alab" x="${xat(i)}" y="${y0+16}" text-anchor="middle">тур ${i+1}</text>`;
+  h+=`<line class="axis" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y0}"/>`;
+  const col={anarchy:'var(--anarchy)',children:'var(--children)',teens:'var(--teens)'};
+  for (const k of ORDER){
+    const c=DATA.worlds[k].curve;
+    let d=c.map((v,i)=>`${i?'L':'M'}${xat(i).toFixed(1)} ${yat(v).toFixed(1)}`).join(' ');
+    h+=`<path d="${d}" fill="none" stroke="${col[k]}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    c.forEach((v,i)=>{h+=`<circle cx="${xat(i)}" cy="${yat(v)}" r="3" fill="${col[k]}"/>`});
+    const ly=yat(c[c.length-1]);
+    h+=`<text x="${x1+8}" y="${ly+4}" fill="${col[k]}" font-size="12" font-weight="600">${DATA.worlds[k].label}</text>`;
+    h+=`<text x="${x1+8}" y="${ly+18}" fill="var(--dim)" font-size="10">${c[c.length-1].toFixed(0)}</text>`;
+  }
+  svg.innerHTML=h;
+}
+
+function drawSummary(){
+  const tb=document.querySelector('#summary tbody');
+  const col={anarchy:'var(--anarchy)',children:'var(--children)',teens:'var(--teens)'};
+  tb.innerHTML=ORDER.map(k=>{const w=DATA.worlds[k],f=w.final;
+    return `<tr><td><span class="swatch" style="background:${col[k]}"></span>${w.label}</td>
+      <td>${f.max.toFixed(0)}</td><td>${f.mean.toFixed(0)}</td>
+      <td>${f.total_bank.toFixed(0)}</td><td>${f.n_punish}</td></tr>`;}).join('');
+  const leg=document.getElementById('legend');
+  leg.innerHTML=ORDER.map(k=>`<span><span class="swatch" style="background:${col[k]}"></span><b>${DATA.worlds[k].label}</b> — ${DATA.worlds[k].sublabel}</span>`).join('');
+
+  // penalty ribbon (who burned whom, by tour)
+  const rb=document.getElementById('ribbon');
+  let rows='<div style="font-size:11px;color:var(--dim);margin:8px 0 4px;text-transform:uppercase;letter-spacing:.06em">Лента штрафов</div>';
+  for (let r=0;r<T;r++){
+    let cells=ORDER.map(k=>{const p=DATA.worlds[k].tours[r].punish;
+      return p?`<span style="color:${col[k]}">${DATA.worlds[k].label}: 🔥#${p.target}</span>`:'';}).filter(Boolean).join(' · ');
+    rows+=`<div class="row"><span class="tno">тур ${r+1}</span><span>${cells||'—'}</span></div>`;
+  }
+  rb.innerHTML=rows;
+
+  // field comparison
+  const f=DATA.field;
+  const fb=document.querySelector('#field tbody');
+  fb.innerHTML=`
+   <tr><td>круг 1 (макс)</td><td>~${f.circle1_max} / ${f.circle1_alt}</td><td>${DATA.worlds.anarchy.final.max.toFixed(0)}</td></tr>
+   <tr><td>дети, круг 2 (макс)</td><td>~${f.children_max}</td><td>${DATA.worlds.children.final.max.toFixed(0)}</td></tr>
+   <tr><td>подростки, круг 2 (макс)</td><td>~${f.teens_max} · обеднели</td><td>${DATA.worlds.teens.final.max.toFixed(0)} · средний ${DATA.worlds.teens.final.mean.toFixed(0)}</td></tr>`;
+  document.getElementById('fieldnote').textContent=f.note;
+}
+
+function go(r){
+  cur=r;
+  const finale = (r===T);
+  document.getElementById('finale').classList.toggle('show', finale);
+  document.querySelector('.panels').style.display = finale ? 'none' : 'grid';
+  document.querySelectorAll('.step').forEach(b=>{
+    const rr=b.dataset.r;
+    b.classList.toggle('on', (rr!==undefined && +rr===r) || (b.classList.contains('finale')&&finale));
+  });
+  if (!finale) renderTour(r);
+  else { drawCurves(); drawSummary(); }
+}
+
+document.addEventListener('keydown',e=>{
+  if (e.key==='ArrowRight') go(Math.min(T, cur+1));
+  else if (e.key==='ArrowLeft') go(Math.max(0, cur-1));
+});
+
+document.getElementById('foot').innerHTML =
+  `Витрина mod H3 · public goods · Noether. Каждое число — из EventLog конкретного прогона `+
+  `(seed ${DATA.seed}). Это не новый вердикт: robustness (10 сидов) — в WO_stage3-mod-H3.md. `+
+  `Множитель денег ×${DATA.money_mult} (старт тела → 20 денег).`;
+
+drawSummary(); drawCurves();   // prebuild finale so a jump is instant
+go(0);
+</script>
+</body>
+</html>

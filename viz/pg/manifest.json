@@ -1,0 +1,29 @@
+{
+  "commit": "58775dd",
+  "config": {
+    "m": 5.0,
+    "money_mult": 20.0,
+    "n": 12,
+    "params": {
+      "pg_learn": 0.15,
+      "pg_m": 5.0,
+      "pg_p0": 0.6,
+      "pg_stake": 0.2,
+      "punish_cost": 0.1,
+      "punish_frac": 0.2
+    },
+    "tours": 5,
+    "worlds": [
+      "anarchy",
+      "children",
+      "teens"
+    ]
+  },
+  "event_count": 300,
+  "generated_at": "2026-07-13T18:57:04Z",
+  "numpy": "2.2.6",
+  "python": "3.13.4",
+  "runner": "pg_showcase",
+  "schema": 1,
+  "seed": 7
+}
