@@ -232,7 +232,25 @@ def _hg2_2(seeds=(7, 8, 9), days=300, enforcers=3):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical extort-reflex world, the
+    frame MG2-refl anchors). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfgg2(policy="reflex", extort=True, seed=seed, days=days), days)
+    n_seiz, seized, takers = _extort_stats(w)
+    path = write_result("run_artifact_g2", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"seizures": n_seiz, "extorted_total": seized,
+                                 "takers": len(takers), "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod G2 — Фаза 1: EXTORT — control without ownership. A conserving body→body")
     print("seizure from a co-present owner, gated by the intent layer and the guard's shadow.")

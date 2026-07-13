@@ -226,7 +226,27 @@ def _hh(seeds=(7, 8, 9), days=700):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (a canonical confound-free debt world, the
+    frame MH-mass/replay/ledger exercises). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 500
+    w = _run(_cfgh2(r=0.3, seed=seed, days=days), days)
+    d = w._debt
+    path = write_result("run_artifact_h2", w, seed=seed,
+                        invariants={"drift": w.matter_drift(),
+                                    "ledger_resid": d.ledger_identity_residual()},
+                        metrics={"loans": d.n_loans, "defaults": d.n_defaults,
+                                 "claim_inherits": d.n_claim_inherits,
+                                 "bonded": len(d._bonded), "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod H виток 2 — the four confounds removed; HH1 re-asked honestly.")
     print(HDR)

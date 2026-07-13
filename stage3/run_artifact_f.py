@@ -283,9 +283,27 @@ def _hf3(seeds=(7, 8, 9), days=300):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical vessel world, the frame
+    MF-replay/MF-mass exercise). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 250
+    w = _run(_cfg(artifacts=True, seed=seed, days=days), days)
+    af = w._artifacts
+    path = write_result("run_artifact_f", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"writes": len(af.writes), "copies": len(af.copies),
+                                 "reads": len(af.reads), "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 #  Main                                                                        #
 # --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod F — material culture (vitok 1 = vessel): a DUAL-LAYER artifact reservoir.")
     print("The FIRST extension of the tower's mass law: soil+plant+Σbody+Σartifact.mass.")
