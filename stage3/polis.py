@@ -405,6 +405,12 @@ class Polis(AppropriationWorld):
     # ---- the step seam ----------------------------------------------------- #
     def step(self):
         super().step()                         # full tower + appropriation, unchanged
+        # mod G2 GC: reclaim dead oids from the two mark-ledgers. Canon (sim_comm) has just
+        # culled the dead from self.pop; do this BEFORE any consumer (the intent affordance
+        # scan, _extort, _delegate) reads a ledger this tick, so the sweep is invisible to
+        # the world. Behaviourally inert BY CONSTRUCTION — see _gc_mark_ledgers / gate
+        # MG2V-GC-IDENT.
+        self._gc_mark_ledgers()
         # mod E: refresh the social registry from this tick's co-locations (no-op if OFF)
         self._dunbar.register_contacts(self, self.t)
         # mod F: writing / reading / copying / dual decay (no-op if OFF). Runs AFTER the
@@ -429,6 +435,31 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
+
+    # ---- mod G2 GC: dead-oid reclamation for the mark-ledgers (WO_mark-ledger-gc) ---- #
+    def _gc_mark_ledgers(self):
+        """Sweep dead oids out of both G2 mark-ledgers, once per tick.
+
+        Pawns are mortal and oids are NEVER reused (sim_comm._next is a monotonic
+        counter), so a dead oid can never re-enter as a living actor: its mark gates
+        nobody. Every consumer — intent_extra_affordances, _extort, _delegate_remit —
+        only ever tests membership for a LIVING pawn (drawn from self.pop or the
+        this-tick income of living owners), so removing a dead oid changes no decision.
+        The reclamation is thus behaviourally inert BY CONSTRUCTION; gate MG2V-GC-IDENT
+        proves the fingerprint is bit-identical before and after. Without it the sets
+        grow monotonically with the cumulative number of ever-marked dead (the leak the
+        longrun audit found: _extort_marks ×255 the living population at T=3000).
+
+        Both ledgers are swept so the leak cannot migrate to the neighbour. No living
+        mark is ever dropped — the sets are intersected with the living oids — so the
+        surviving contents are identical for every living pawn. Observer seam (canon
+        owns the per-pawn death path in sim_comm and must not be touched); the empty-set
+        fast path keeps every OFF/asleep world a strict no-op."""
+        if not (self._extort_marks or self._delegate_marks):
+            return                             # nothing minted yet (OFF or asleep) => free
+        living = {a.oid for a in self.pop}
+        self._extort_marks &= living
+        self._delegate_marks &= living
 
     # ---- mod G2: EXTORT — reverse-signed seizure in the shadow of presence ---- #
     def _build_extort_cache(self):
