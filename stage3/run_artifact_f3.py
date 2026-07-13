@@ -349,7 +349,25 @@ def _context_metric(seeds=(7, 8, 9), days=300):
     print("  — the frame within which any HV1 C−B effect must be read.")
 
 
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical settle+vision world, the
+    frame MFv3-replay exercises). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfg3(settle=True, vision=True, seed=seed, days=days), days)
+    af = w._artifacts
+    path = write_result("run_artifact_f3", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"stores": len(af.stores), "capitals": len(af.capitals),
+                                 "draws": len(af.draws), "boosts": len(af.boosts),
+                                 "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod F — vitok 3 (v2): store_settle (grain put away for a day) + store_vision")
     print("(an organ inside canonical perception). Both OFF => byte-identical to vitok 2.")

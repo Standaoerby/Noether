@@ -405,7 +405,25 @@ def _cal2(seeds=(7, 8, 9), days=300):
 
 
 
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical store+capital world, the
+    frame MFv2-replay exercises). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfg2(store=True, capital=True, seed=seed, days=days), days)
+    af = w._artifacts
+    path = write_result("run_artifact_f2", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"stores": len(af.stores), "capitals": len(af.capitals),
+                                 "draws": len(af.draws), "boosts": len(af.boosts),
+                                 "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod F — vitok 2: store + capital. Detached, accumulable mass on the vessel")
     print("chassis: a store un-prints into a hungry body (mass→body), a capital opens")

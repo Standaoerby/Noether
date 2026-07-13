@@ -36,6 +36,9 @@ from stage3.directive import Directive, IMPLANT
 from stage3.pawn import phase_of
 
 SCHEMA = "glass-1"
+# S7 (WO_consolidation-sprint): version of the exporter's event-annotation layer. Stamped
+# onto every row ONLY under --annotate; bump when the derived/seq semantics change.
+DETECTOR_VERSION = "s7-1"
 FIELD_EVERY = 10       # soil/plant full-grid cadence (between them the renderer interpolates)
 TOP_KNOWN = 8          # Э-3: at most top-8 known-ties per pawn enter a snapshot
 TOP_DENY = 12          # β-3: at most top-12 deny loci per snapshot (cumulative, from deny_loci)
@@ -288,11 +291,27 @@ def _snapshot(w, t, want_fields):
     return snap
 
 
-def _event_row(e):
+def _causal_rank(scale):
+    """S7 within-tick ordering: primary emissions (individual-scale, produced by a mechanic
+    as it acts) sort before derived detector events (deme/world-scale, reconstructed from
+    state). Ties inside a rank are broken by `seq` (the write order) — a stable sort."""
+    return 0 if scale == "individual" else 1
+
+
+def _event_row(e, seq=None, annotate=False):
+    """One events.jsonl row. Default (annotate=False) is byte-identical to the shipped film.
+    With --annotate it gains three OPT-IN fields (S7): `seq` (write order in the log),
+    `derived` (True for deme/world-scale detector events — the honest 'this was computed,
+    not emitted' flag, per sim_eventlog's scale vocabulary), and `detector_version`."""
     where = None if e.where is None else [int(e.where[0]), int(e.where[1])]
     dm = None if e.dm is None else _q(e.dm, 6)
-    return {"t": e.t, "type": e.kind, "actor": e.actor, "where": where,
-            "dm": dm, "data": _json_safe(e.data or {})}
+    row = {"t": e.t, "type": e.kind, "actor": e.actor, "where": where,
+           "dm": dm, "data": _json_safe(e.data or {})}
+    if annotate:
+        row["seq"] = seq
+        row["derived"] = e.scale in ("deme", "world")
+        row["detector_version"] = DETECTOR_VERSION
+    return row
 
 
 def _aggregate_events(events, top_k=TOP_DENY):
@@ -345,11 +364,18 @@ def run_capture(cfg, every):
     return w, snapshots
 
 
-def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mode="raw"):
+def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mode="raw",
+           annotate=False, sort_events=False):
     """Export a package. `cfg` (a PolisConfig) overrides the default showcase — used to ship
     the G2 layers and the split-screen presets; when None the default showcase is built from
     seed/days (byte-identical to the shipped film). `events_mode`: "raw" (one line per event,
-    default) or "agg" (one line per tick: per-type sums + top-K loci; gate V3-AGG)."""
+    default) or "agg" (one line per tick: per-type sums + top-K loci; gate V3-AGG).
+
+    S7 (opt-in, raw only; defaults keep events.jsonl byte-identical to β-3):
+      * `annotate` — stamp each row with seq / derived / detector_version.
+      * `sort_events` — re-order rows by (t, causal_order, seq) for consumers wanting a
+        canonical chronology; `seq` still records the original write order, so it is a
+        pure permutation (no row gained or lost)."""
     if cfg is None:
         cfg = build_showcase_cfg(seed=seed, days=days)
     else:
@@ -401,7 +427,12 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
         agg = _aggregate_events(events)
         files["events.jsonl"] = ("".join(_dumps(r) + "\n" for r in agg)).encode("utf-8")
     else:
-        files["events.jsonl"] = ("".join(_dumps(_event_row(e)) + "\n" for e in events)).encode("utf-8")
+        indexed = list(enumerate(events))                    # (seq, event) in write order
+        if sort_events:
+            indexed = sorted(indexed, key=lambda p: (p[1].t, _causal_rank(p[1].scale), p[0]))
+        files["events.jsonl"] = ("".join(
+            _dumps(_event_row(e, seq=seq, annotate=annotate)) + "\n"
+            for seq, e in indexed)).encode("utf-8")
 
     shas = {}
     total = 0
@@ -437,6 +468,11 @@ def main():
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--arena", type=str, default="6", help="arena_side (int) or 'none'")
     ap.add_argument("--events", choices=("raw", "agg"), default="raw")
+    # S7 (opt-in; default OFF => events.jsonl byte-identical to the shipped film).
+    ap.add_argument("--annotate", action="store_true",
+                    help="stamp each raw event row with seq / derived / detector_version")
+    ap.add_argument("--sort", action="store_true", dest="sort_events",
+                    help="order raw rows by (t, causal_order, seq) — a pure permutation")
     # mod G2 (β-3) layer switches — default OFF => byte-identical to the shipped showcase.
     ap.add_argument("--intent", choices=("off", "reflex", "utility", "live"), default="off")
     ap.add_argument("--extort", action="store_true")
@@ -456,7 +492,8 @@ def main():
         extort_on=args.extort, delegate_on=args.delegate, revoke_tooth=args.tooth,
         delegate_m=args.m, delegate_compliance_dl=args.compliance,
         extort_enforcers=args.extort_enforcers, delegate_enforcers=args.delegate_enforcers)
-    export(out, every=args.every, cfg=cfg, events_mode=args.events)
+    export(out, every=args.every, cfg=cfg, events_mode=args.events,
+           annotate=args.annotate, sort_events=args.sort_events)
 
 
 if __name__ == "__main__":

@@ -318,7 +318,26 @@ def _hgg3(seeds=(7, 8, 9), days=300):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical utility world, the frame
+    MG-util anchors; personality actually filters verbs). No timestamp => byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfgg(policy="utility", seed=seed, days=days), days)
+    af = w._artifacts
+    deaths, _med = _life_stats(w)
+    path = write_result("run_artifact_g", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"draws": len(af.draws), "deaths": deaths,
+                                 "method": af.carried_max(), "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod G — vitok 1: the intent layer (триггер → интент → взаимодействие → результат).")
     print("A choice between the affordance scan and the physics, WITHOUT touching the physics.")

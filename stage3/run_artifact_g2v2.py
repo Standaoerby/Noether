@@ -416,7 +416,25 @@ def _hg2v_4(seeds=(7, 8, 9), days=300, enforcers=3):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical reputation-tooth world, the
+    frame MG2V-REFACTOR anchors). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfgg2d(tooth="reputation", seed=seed, days=days), days)
+    path = write_result("run_artifact_g2v2", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"delegate_flow": w._delegate_flow,
+                                 "defections": w._delegate_defections,
+                                 "root": w._delegate_root, "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod G2 виток 2 — Фаза 1: framing the trophy. Sweep the compliance threshold and")
     print("read the reaped flow against the ACTUAL compliant fraction it induces.")

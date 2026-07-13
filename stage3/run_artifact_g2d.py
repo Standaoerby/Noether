@@ -221,7 +221,25 @@ def _hg2d_2(seeds=(7, 8, 9), days=300):
 
 
 # --------------------------------------------------------------------------- #
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical delegate-auto world, the
+    frame MG2D-replay anchors). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 300
+    w = _run(_cfgg2d(tooth="auto", seed=seed, days=days), days)
+    flow, defections, root = _dele_stats(w)
+    path = write_result("run_artifact_g2d", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"delegate_flow": flow, "defections": defections,
+                                 "root": root, "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
+# --------------------------------------------------------------------------- #
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod G2 — Фаза 2: DELEGATE / REVOKE — control without presence. The root reaps its")
     print("delegates' collections through a permission ledger; the REVOKE tooth gives it teeth.")

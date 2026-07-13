@@ -20,12 +20,12 @@ Run:  py stage3\run_glass_v3.py
 """
 from __future__ import annotations
 
-import sys, os, json, tempfile, shutil
+import sys, os, json, hashlib, tempfile, shutil
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Code"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sim_eventlog import EventLog
+from sim_eventlog import EventLog, Event
 from stage3.polis import Polis
 from stage3 import viz_export as vx
 from stage3.run_glass_v import _gate_v_schema, _load_pkg
@@ -33,6 +33,9 @@ from stage3.run_glass_v import _gate_v_schema, _load_pkg
 HDR = "=" * 78
 _DAYS = 140
 _SEED = 7
+# S7 anchor: sha256 of the DEFAULT events.jsonl (canonical showcase, seed 7, days 140). The
+# opt-in annotation must never move this byte — the "β-3 reproduced byte-for-byte" gate.
+_EVENTS_ANCHOR = "2735d66961152a056fa89206bd74a2a0c59115c0b5f16b16560ae429cc12e323"
 
 
 def _full_g2_cfg(days=_DAYS, seed=_SEED, arena_side=6, events=None):
@@ -134,6 +137,53 @@ def _gate_v3_num():
     assert ok
 
 
+def _gate_v3_s7():
+    """S7 (WO_consolidation-sprint): opt-in event annotation. The default export is
+    byte-for-byte the β-3 film (anchor); --annotate is a STRICT superset (adds exactly
+    seq / derived / detector_version, changes no existing field); --sort is a pure
+    permutation ordered by (t, causal_order, seq); `derived` truthfully tracks deme/world
+    scale (per sim_eventlog's vocabulary), not a vacuous constant."""
+    cfg = vx.build_showcase_cfg(seed=_SEED, days=_DAYS)
+
+    def _events(**kw):
+        d = tempfile.mkdtemp(prefix="glass_v3s7_")
+        vx.export(d, seed=_SEED, days=_DAYS, every=1, verbose=False, cfg=cfg, **kw)
+        blob = open(os.path.join(d, "events.jsonl"), "rb").read()
+        rows = [json.loads(x) for x in blob.decode("utf-8").splitlines()]
+        shutil.rmtree(d, ignore_errors=True)
+        return blob, rows
+
+    base_b, base = _events()
+    ann_b, ann = _events(annotate=True)
+    _srt_b, srt = _events(annotate=True, sort_events=True)
+    extra = {"seq", "derived", "detector_version"}
+
+    sha = hashlib.sha256(base_b).hexdigest()
+    ok_anchor = sha == _EVENTS_ANCHOR
+    ok_superset = all(set(r) == set(base[i]) | extra for i, r in enumerate(ann))
+    ok_strip = all({k: v for k, v in r.items() if k not in extra} == base[i]
+                   for i, r in enumerate(ann))
+    ok_seq = all(r["seq"] == i for i, r in enumerate(ann))
+    ok_ver = all(r["detector_version"] == vx.DETECTOR_VERSION for r in ann)
+    ok_perm = sorted(map(vx._dumps, srt)) == sorted(map(vx._dumps, ann))
+    ok_ord = all((srt[i]["t"], int(srt[i]["derived"]), srt[i]["seq"])
+                 <= (srt[i + 1]["t"], int(srt[i + 1]["derived"]), srt[i + 1]["seq"])
+                 for i in range(len(srt) - 1))
+    # `derived` is real: synthetic events of each scale flag correctly.
+    dd = {sc: vx._event_row(Event(5, "x", sc), seq=0, annotate=True)["derived"]
+          for sc in ("individual", "deme", "world")}
+    ok_derived = dd == {"individual": False, "deme": True, "world": True}
+
+    ok = all([ok_anchor, ok_superset, ok_strip, ok_seq, ok_ver, ok_perm, ok_ord, ok_derived])
+    print(f"V3-S7     opt-in annotation safe -> {'✓' if ok else '✗'}")
+    print(f"          default events.jsonl == β-3 anchor {sha[:16]} ({ok_anchor})")
+    print(f"          --annotate strict superset (+seq/derived/detector_version) ({ok_superset and ok_strip})")
+    print(f"          seq==write-order ({ok_seq}) · detector_version={vx.DETECTOR_VERSION} ({ok_ver})")
+    print(f"          --sort pure permutation, (t,causal,seq)-ordered ({ok_perm and ok_ord})")
+    print(f"          derived tracks scale {dd} ({ok_derived})")
+    assert ok
+
+
 def main():
     print(HDR)
     print("viz β-3 V3-gates — the power-without-ownership layers; the reader stays pure and")
@@ -143,8 +193,10 @@ def main():
     _gate_v3_old()
     _gate_v3_agg()
     _gate_v3_num()
+    _gate_v3_s7()
     print(f"\n{HDR}\nviz β-3 V3-gates green: pure reader with G2 on (V3-FP), backward-compatible")
-    print("schema (V3-OLD), agg layer-equivalent to raw (V3-AGG), film == science (V3-NUM).")
+    print("schema (V3-OLD), agg layer-equivalent to raw (V3-AGG), film == science (V3-NUM),")
+    print("opt-in event annotation byte-safe (V3-S7).")
     print(HDR)
 
 

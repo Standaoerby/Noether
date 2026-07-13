@@ -128,7 +128,24 @@ def _he3_status(seed=7, days=300, K=15):
           f"in social memory  (n_owner={n_owner}: weak with founders-policy)")
 
 
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the canonical dunbar_K=15 world, the frame
+    ME-mass/ME-replay exercise). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    seed, days = 7, 250
+    w = _run(_cfg(dunbar=15, seed=seed), days)
+    path = write_result("run_dunbar_e", w, seed=seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"registries": len(w._dunbar.known),
+                                 "evictions": len(w._dunbar.evictions),
+                                 "pop": len(w.pop)})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     print(HDR)
     print("mod E — Dunbar's number: a social attention locus over PEOPLE (not places).")
     print("A pure belief overlay; mass is never touched. dunbar_K=None == canon.")

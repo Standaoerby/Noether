@@ -203,7 +203,26 @@ def _channel_demo():
     return hON - hOFF
 
 
+def _emit_json():
+    """S2 — a deterministic machine-readable result (the B1 headline econ world, the sleeping
+    Polis the main gates reduce to canon). No timestamp => a double run is byte-identical."""
+    from stage3.resultjson import write_result
+    cfg = PolisConfig(appropriation=0.5, owner_policy="claim", arena_side=6,
+                      t_awaken=10 ** 9, demerzel_directive=None)
+    w, _ = run_polis(cfg)
+    em = elite_metrics(w)
+    path = write_result("run_polis", w, seed=cfg.seed,
+                        invariants={"drift": w.matter_drift()},
+                        metrics={"pop": em["alive"], "owners": em["n_owners"],
+                                 "elite_share": em["elite_share"],
+                                 "elite_absolute": em["elite_absolute"]})
+    print(f"{path} written (state_hash {w.state_fingerprint()})")
+
+
 def main():
+    if "--json" in sys.argv:
+        _emit_json()
+        return
     _gates()
     _demo()
     dImp = _channel_demo()
