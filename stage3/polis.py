@@ -212,6 +212,24 @@ class PolisConfig:
                                      #   (1-m) of what it forwards => a middle-management strata.
                                      # Read ONLY when delegate_on; d<=1 leaves every anchor bit-
                                      # for-bit (the chain path is never entered).
+    # mod H (DEBT, виток 1) — power from CONSENT. A loan from a creditor's free store into a
+    # hungry debtor's body (mass-neutral), an ENDOGENOUS rate fixed at the contract (vintage),
+    # a per-tick payment out of the debtor's income, and a rights-deprivation ladder that a
+    # default turns into bondage. DELEGATE is coercion from above, EXTORT is violence in the
+    # shadow — debt is the deal from below: власть без титула, без насилия, без присутствия.
+    # OFF by default => no loan is ever offered and the layer is not built => byte-identical to
+    # mod G2 (gate MH-OFF). A loan needs a store to lend from, so store_on must be true too.
+    debt_on: bool = False
+    debt_r: float = 0.3          # share of the debtor's per-tick income paid to the creditor
+                                 # (swept {0.2,0.3,0.5}); read ONLY when debt_on.
+    debt_k_min: float = 1.1      # rate floor  (D/S -> 0): a loan of x mints x·k_min obligation
+    debt_k_max: float = 2.0      # rate ceiling (D/S -> inf)
+    debt_hunger_at: float = None # loan hunger line; None => store_draw_at (lend exactly where
+                                 # hunger would otherwise draw). Read ONLY when debt_on.
+    debt_income_drop: float = 0.5  # income_drop trigger: income this tick < this · trailing mean
+                                 # income => a shock loan (reason=income_drop). Read ONLY debt_on.
+    debt_invest_at: float = None # investment trigger: a fat non-owner (body >= this) may borrow
+                                 # to fund a claim (reason=investment); None => 2·REPRO.
 
 
 class Polis(AppropriationWorld):
@@ -341,6 +359,10 @@ class Polis(AppropriationWorld):
         self._delegate_flow = 0.0        # cumulative meta-tribute reaped by the root (kg)
         self._delegate_events = []       # (t, delegate_oid, amount) — remittances that fired
         self._delegate_defections = 0    # count of ticks a delegate withheld (any tooth)
+        # mod H (DEBT): the debt layer. Inert (no loan ever offered, empty fingerprint blob)
+        # unless cfg.debt_on => byte-identical to mod G2 (gate MH-OFF). See stage3/debt.py.
+        from .debt import DebtLedger
+        self._debt = DebtLedger(cfg)
 
     # ---- pawn views (thick personalities, deterministic from oid) ---------- #
     def pawn(self, oid) -> Pawn:
@@ -404,6 +426,9 @@ class Polis(AppropriationWorld):
 
     # ---- the step seam ----------------------------------------------------- #
     def step(self):
+        # mod H (DEBT): snapshot bodies so income THIS tick = the gain across the canonical
+        # step (grazing + appropriation − metabolism). No-op unless debt_on.
+        _debt_body0 = ({a.oid: a.body for a in self.pop} if self._debt.on else None)
         super().step()                         # full tower + appropriation, unchanged
         # mod G2 GC: reclaim dead oids from the two mark-ledgers. Canon (sim_comm) has just
         # culled the dead from self.pop; do this BEFORE any consumer (the intent affordance
@@ -428,6 +453,14 @@ class Polis(AppropriationWorld):
         # so the tick's transfers settle before the apex takes its cut.
         if self._delegate_on and self._delegate_root is not None:
             self._delegate(self.t)
+        # mod H (DEBT): the deal from below. Runs after the G2 redistributions settle, so
+        # payments/loans read this tick's final bodies; income is the canon gain measured
+        # across super().step() (redistribution is not income). No-op unless debt_on.
+        if self._debt.on:
+            income = {a.oid: max(0.0, a.body - _debt_body0.get(a.oid, a.body))
+                      for a in self.pop}
+            self._debt.set_income(income)
+            self._debt.tick(self)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -549,8 +582,13 @@ class Polis(AppropriationWorld):
                 # Фаза 4: the seized owner testifies — every taker on this cell is marked and
                 # barred from EXTORT henceforth (belief-only; no mass moves). Guard-independent,
                 # so reputation reaches the shadows the sparse guard corps (HG2-2) cannot.
-                for tk in takers:
-                    self._extort_marks.add(tk.oid)
+                # mod H §1.5: a BONDED victim (debt stage 3) has lost its standing — its
+                # testimony no longer counts. The mark lands only if a NON-bonded victim was
+                # seized here. With debt OFF is_bonded is always False => marks as before
+                # (byte-identical, MH-OFF).
+                if any(not self._debt.is_bonded(v) for v in owners_oids):
+                    for tk in takers:
+                        self._extort_marks.add(tk.oid)
 
     # ---- mod G2: DELEGATE / REVOKE — the apex reaps k cells without presence ---- #
     def _appropriate(self):
@@ -717,6 +755,10 @@ class Polis(AppropriationWorld):
         it = self._artifacts.intent
         if it is not None:
             blob += it.fingerprint_blob()
+        # mod H (DEBT): the debt state enters the blob ONLY once a loan has issued; OFF
+        # (and asleep-before-first-loan) returns b"", so the term is byte-identical to mod
+        # G2 and every anchor is holy (gate MH-OFF).
+        blob += self._debt.fingerprint_blob()
         if not blob:
             return base
         import hashlib
