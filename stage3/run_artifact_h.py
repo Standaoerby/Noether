@@ -154,34 +154,40 @@ def _gate_mh_ledger():
 
 
 def _gate_mh_bankrupt():
-    """NOT a no-op AND deprivation enforced at EXECUTION. Run a debt world that produces
-    bondage; assert (1) its fingerprint differs from the same frame without debt (the mechanic
-    bites the world), and (2) the bonded are actually stripped: zero claims held, zero seats in
-    the speaker set, zero new loans to any stage>=2 debtor. Distinguishing no-op from NULL is
-    mandatory before any scientific verdict — this gate is that discriminator."""
-    r = 0.5
-    w = _run(_cfgh(r=r, days=900), 900)                       # r high + long => bondage forms
-    d = w._debt
-    base = _run(_cfgg(policy="off", arena=None, days=900, store_access="maker"), 900)
+    """NOT a no-op AND deprivation enforced at EXECUTION. (1) The debt layer bites the world —
+    a debt-on run diverges (fingerprint) from the same frame with no debt. (2) When a pawn IS
+    bonded, its rights are stripped at execution. Under the K5 honest default test (H2-bis)
+    natural bondage is rare — r·income seldom exceeds body−DEATH — so the deprivation is proved
+    by CONSTRUCTION: force a living owner-speaker into bondage with a real debt, step once, and
+    confirm its claim is revoked and its voice struck (testing _enforce_rights directly)."""
+    from sim_eventlog import EventLog
+    from stage3.polis import Polis
+    # (1) non-no-op
+    w = _run(_cfgh(r=0.5, days=700), 700)
+    base = _run(_cfgg(policy="off", arena=None, days=700, store_access="maker"), 700)
     diverges = w.state_fingerprint() != base.state_fingerprint()
-    frozen = {o for o, s in d.stage.items() if s >= 2}
-    owners = set(w.owner_ids())
-    spk = getattr(w, "speaker", set())
-    # Bondage is CUMULATIVE (n_defaults): a defaulted pawn strips all surplus, often starves,
-    # and dies — so the live _bonded snapshot is frequently empty. The robust liveness signal
-    # is that a default ever fired; the deprivation is proved by (a) the end-state invariant no
-    # frozen/bonded pawn holds a claim or a voice — my enforcement maintains it every tick —
-    # and (b) that a strip actually executed at least once (event in the log), so the pass is
-    # never vacuous. New loans to stage>=2 are barred by construction in _lend.
-    claims_frozen = sum(1 for o in owners if o in frozen)
-    voice_bonded = sum(1 for o in d._bonded if o in spk)
-    stripped = sum(1 for e in d.events if e[1] in ("debt_voice_strip", "debt_claim_revoke"))
-    alive = d.n_defaults > 0
-    deprived = (claims_frozen == 0 and voice_bonded == 0 and stripped > 0)
-    ok = diverges and alive and deprived
+    # (2) deprivation at execution — constructed (K5 makes natural bondage ~0)
+    w2 = Polis(EventLog(), _cfgh(r=0.5, days=0))
+    for _ in range(120):
+        w2.step()
+    live = {a.oid for a in w2.pop}
+    spk0 = getattr(w2, "speaker", set())
+    victim = next((o for o in sorted(set(w2.owner_ids()) & live) if o in spk0), None)
+    assert victim is not None, "MH-BANKRUPT: no owner-speaker to bond"
+    creditor = next(o for o in sorted(live) if o != victim)
+    w2._debt.debt[(creditor, victim)] = 5.0          # a real outstanding obligation...
+    w2._debt.principal[victim] = 3.0
+    w2._debt._bonded.add(victim)                      # ...and the pawn is bonded (stage 3)
+    w2.step()                                         # _enforce_rights runs inside the debt tick
+    now_owner = victim in set(w2.owner_ids())
+    now_speaker = victim in getattr(w2, "speaker", set())
+    strips = sum(1 for e in w2._debt.events if e[1] in ("debt_voice_strip", "debt_claim_revoke"))
+    deprived = (not now_owner) and (not now_speaker) and strips > 0
+    ok = diverges and deprived
     print(f"MH-BANKRUPT non-no-op + deprivation at execution -> {'✓' if ok else '✗'}")
-    print(f"          defaults(cumulative)={d.n_defaults} live-bonded={len(d._bonded)} frozen(st>=2)={len(frozen)} | fp diverges: {diverges}")
-    print(f"          claims held by frozen={claims_frozen} · bonded voices={voice_bonded} (want 0) · strips executed={stripped}")
+    print(f"          fp diverges from no-debt: {diverges} | constructed victim {victim}: "
+          f"owner_after={now_owner} speaker_after={now_speaker} (want both False)")
+    print(f"          strip events executed={strips}")
     assert ok
 
 

@@ -249,6 +249,12 @@ class PolisConfig:
                                  # canon _do_claims runs verbatim => byte-identical (anchor
                                  # MH2-OFF). > 0 makes ownership scarce, so credit can buy a
                                  # SOURCE OF INCOME and the investment trigger comes alive.
+    # mod H2-bis (decision-4a) — the credit CHANNEL. Lending is already same-cell co-present;
+    # this WIDENS it to the substrate's existing von-Neumann movement neighbourhood (DIRS
+    # N/S/W/E). False (default) => same cell only == vitok 2 (comparability, no new geometry);
+    # True => a creditor on a DIRS-adjacent cell may also lend, so credit has more chances to
+    # meet — the test of whether the channel was the binding constraint (HHB2). Non-no-op.
+    debt_copresence: bool = False
 
 
 class Polis(AppropriationWorld):
