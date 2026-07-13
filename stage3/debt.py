@@ -70,6 +70,13 @@ class DebtLedger:
         self.overdue_ticks = int(cfg.debt_overdue_ticks)      # K4
         self.claim_cost = float(cfg.claim_cost)               # K3 (Polis charges it; debt reads it)
         self.copresence = bool(cfg.debt_copresence)           # H2-bis decision-4a (credit channel)
+        self.enforce_on = bool(cfg.debt_enforce_on)           # H3 Phase 2 (the enforcer)
+        self.enforce_frac = float(cfg.debt_enforce_frac)
+        self.enforce_cost = float(cfg.debt_enforce_cost)
+        self.n_enforced = 0                                   # forced extractions that fired
+        self.n_enforce_refused = 0                            # overdue debtors the deme did NOT sanction
+        self.enforced_total = 0.0                             # Σ mass reaching creditors by force
+        self.enforce_cost_total = 0.0                         # Σ enforcement friction -> soil
         # the credit channel offsets: own cell only (False) or the substrate's von-Neumann
         # movement neighbourhood incl. stay (True). Von-Neumann is the EXISTING soседство
         # (sim_stage2.DIRS = N/S/W/E/stay) — no new geometry.
@@ -142,6 +149,9 @@ class DebtLedger:
         self._lend(w, t, living, stores)
         # 4) rights enforcement AT EXECUTION (claim revoke + voice strip for stage>=2/3)
         self._enforce_rights(w, t, living)
+        # 4b) H3 Phase 2: the ENFORCER — the deme collectively extracts an overdue claim by force
+        if self.enforce_on:
+            self._enforce(w, t, living)
         # 5) roll trailing income for the income_drop trigger
         for oid, inc in self._income.items():
             m = self._income_mean.get(oid)
@@ -392,6 +402,65 @@ class DebtLedger:
 
     def is_bonded(self, oid) -> bool:
         return oid in self._bonded
+
+    # ---- H3 Phase 2: the ENFORCER — force collects an overdue claim, deme-sanctioned ---- #
+    def _enforce(self, w, t, living):
+        """In each co-located deme, an OVERDUE debtor (stage >= 2) with an outstanding claim can
+        have it collected BY FORCE — but ONLY if a majority of the present sanction it (the
+        Phase-1 organ, never automatic). K5 is respected: the extraction is capped to leave the
+        body at DEATH+ (coercion takes mass, not life; the remainder stays a claim). Mass: the
+        debtor loses `take`, the creditor receives `take - cost`, the friction `cost` returns to
+        soil (enforcement is not free). The collective remits to the creditor even if absent
+        (like DELEGATE). Conserving; the ledger identity holds (outstanding down by what reached
+        the creditor, repaid up the same — the cost is friction outside the ledger)."""
+        from collections import defaultdict
+        bycell = defaultdict(list)
+        for a in w.pop:
+            bycell[(a.i, a.j)].append(a)
+        for cell in sorted(bycell):
+            members = bycell[cell]
+            i, j = cell
+            for a in sorted(members, key=lambda x: x.oid):
+                d = a.oid
+                if self.stage.get(d, 0) < 2 or self._owed_by(d) <= 1e-12:
+                    continue
+                # the deme votes: supporters = present minus the debtor; a strict majority sanctions
+                supporters = [x for x in members if x.oid != d]
+                if len(supporters) * 2 <= len(members):
+                    self.n_enforce_refused += 1
+                    continue
+                budget = min(self.enforce_frac * a.body, max(0.0, a.body - DEATH))   # K5 cap
+                if budget <= 1e-12:
+                    self.n_enforce_refused += 1
+                    continue
+                for c in sorted(cc for (cc, dd) in self.debt if dd == d):
+                    if budget <= 1e-12:
+                        break
+                    od = self.debt.get((c, d), 0.0)
+                    if od <= 0.0:
+                        continue
+                    take = min(budget, od)
+                    a.body -= take                                # MASS leaves the debtor by force
+                    cost = self.enforce_cost * take
+                    to_creditor = take - cost
+                    creditor = living.get(c)
+                    if creditor is not None:
+                        self._deposit_to_store(w, creditor, to_creditor)   # ...reaches the creditor
+                    else:
+                        w.soil[i, j] += to_creditor                # creditor gone => mass to soil
+                    w.soil[i, j] += cost                          # the friction of coercion -> soil
+                    self.debt[(c, d)] = od - to_creditor          # claim satisfied by what arrived
+                    if self.debt[(c, d)] <= 1e-12:
+                        del self.debt[(c, d)]
+                    self.repaid_total += to_creditor
+                    self.enforced_total += to_creditor
+                    self.enforce_cost_total += cost
+                    budget -= take
+                    self.n_enforced += 1
+                    self.events.append((t, "debt_enforce", c, d, round(to_creditor, 9), "force"))
+                    w.log.emit(t, "debt_enforce", "deme", where=cell, actor=d, dm=-take,
+                               data={"creditor": c, "to_creditor": round(to_creditor, 6),
+                                     "cost": round(cost, 6), "supporters": len(supporters)})
 
     # ---- DEATH: inheritance by _house, else write-off (split by cause) ----- #
     def _resolve_deaths(self, w, t, living):
