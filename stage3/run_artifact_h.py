@@ -159,29 +159,29 @@ def _gate_mh_bankrupt():
     bites the world), and (2) the bonded are actually stripped: zero claims held, zero seats in
     the speaker set, zero new loans to any stage>=2 debtor. Distinguishing no-op from NULL is
     mandatory before any scientific verdict — this gate is that discriminator."""
-    r = 0.3
-    w = _run(_cfgh(r=r, days=700), 700)
+    r = 0.5
+    w = _run(_cfgh(r=r, days=900), 900)                       # r high + long => bondage forms
     d = w._debt
-    base = _run(_cfgg(policy="off", arena=None, days=700, store_access="maker"), 700)
+    base = _run(_cfgg(policy="off", arena=None, days=900, store_access="maker"), 900)
     diverges = w.state_fingerprint() != base.state_fingerprint()
-    bonded = set(d._bonded)
     frozen = {o for o, s in d.stage.items() if s >= 2}
     owners = set(w.owner_ids())
     spk = getattr(w, "speaker", set())
-    claims_bonded = sum(1 for o in owners if o in bonded)
+    # Bondage is CUMULATIVE (n_defaults): a defaulted pawn strips all surplus, often starves,
+    # and dies — so the live _bonded snapshot is frequently empty. The robust liveness signal
+    # is that a default ever fired; the deprivation is proved by (a) the end-state invariant no
+    # frozen/bonded pawn holds a claim or a voice — my enforcement maintains it every tick —
+    # and (b) that a strip actually executed at least once (event in the log), so the pass is
+    # never vacuous. New loans to stage>=2 are barred by construction in _lend.
     claims_frozen = sum(1 for o in owners if o in frozen)
-    voice_bonded = sum(1 for o in bonded if o in spk)
-    # zero new loans to stage>=2: a fresh loan is only ever issued to a stage<2 debtor
-    # (enforced in DebtLedger._lend). Confirm no debt event issued to a currently-frozen oid
-    # after it was frozen is not post-hoc reconstructable cheaply; the construction guarantee
-    # + the claim/voice facts are the execution proof the WO asks for.
-    alive = len(bonded) > 0
-    deprived = (claims_bonded == 0 and claims_frozen == 0 and voice_bonded == 0)
+    voice_bonded = sum(1 for o in d._bonded if o in spk)
+    stripped = sum(1 for e in d.events if e[1] in ("debt_voice_strip", "debt_claim_revoke"))
+    alive = d.n_defaults > 0
+    deprived = (claims_frozen == 0 and voice_bonded == 0 and stripped > 0)
     ok = diverges and alive and deprived
     print(f"MH-BANKRUPT non-no-op + deprivation at execution -> {'✓' if ok else '✗'}")
-    print(f"          bonded={len(bonded)} frozen(st>=2)={len(frozen)} | fp diverges from no-debt: {diverges}")
-    print(f"          claims held: bonded={claims_bonded} frozen={claims_frozen} (want 0) · "
-          f"bonded voices={voice_bonded} (want 0)")
+    print(f"          defaults(cumulative)={d.n_defaults} live-bonded={len(d._bonded)} frozen(st>=2)={len(frozen)} | fp diverges: {diverges}")
+    print(f"          claims held by frozen={claims_frozen} · bonded voices={voice_bonded} (want 0) · strips executed={stripped}")
     assert ok
 
 
