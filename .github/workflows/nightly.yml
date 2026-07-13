@@ -1,0 +1,38 @@
+# S3.2 (WO_consolidation-sprint) — nightly full check on the OS-robust claim.
+#
+# Runs `--suite canonical` (the closed tower + probes + the run_polis smoke). These check
+# CONSERVATION and WITHIN-RUN DETERMINISM, which are OS-robust — they hold on the Linux
+# runner. The stage3 column's `MG*/MH*` gates assert BIT-FOR-BIT fingerprint anchors
+# recorded in the locked env (Windows / Python 3.13.4 / NumPy 2.2.6 — see S4 in the README
+# "Reproducibility"), so they would FAIL on a cloud runner by construction and stay LOCAL
+# (`py Code/verify_all.py --suite all` on the locked box). The longrun T=3000 audit also
+# stays local (S3.3). Any machine-readable results (S2) are published as a build artifact.
+name: nightly
+
+on:
+  schedule:
+    - cron: '0 4 * * *'                    # 04:00 UTC daily
+  workflow_dispatch: {}                     # and on demand
+
+jobs:
+  canonical:
+    name: verify_all --suite canonical (OS-robust invariants)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: install locked deps
+        run: pip install -r requirements-lock.txt
+      - name: verify_all (canonical)
+        working-directory: Code
+        run: python verify_all.py --suite canonical
+      - name: publish results (S2, if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-json
+          path: results/*.json
+          if-no-files-found: ignore

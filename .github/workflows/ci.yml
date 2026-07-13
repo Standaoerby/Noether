@@ -1,0 +1,40 @@
+# S3 (WO_consolidation-sprint) — CI on every PR and push to main.
+# Runs the `fast` suite (tower conservation core + a run_polis smoke) so a PR that turns
+# conservation or determinism red cannot merge. The heavy stage3/longrun sets are nightly
+# (nightly.yml) / local. This is the first PR that checks itself.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fast:
+    name: verify_all --suite fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'          # lock pins 3.13.4 for bit-for-bit; CI checks the
+                                          # semantic invariants (conservation + within-run
+                                          # determinism), robust across the 3.13.x patch line.
+      - name: install locked deps
+        run: pip install -r requirements-lock.txt
+      - name: verify_all (fast)
+        working-directory: Code            # verify_all spawns sim_*.py / ../stage3/*.py by relative path
+        run: python verify_all.py --suite fast
+
+  ruff:
+    name: ruff (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true                # S3.4 — advisory, never fails the build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install ruff
+      - run: ruff check . || true

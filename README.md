@@ -61,13 +61,34 @@ A read-only lens over the sim (the canon is never touched; fingerprint-gated). I
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt          # numpy, matplotlib
+pip install -r requirements.txt          # numpy, matplotlib (dev); reproducible env: requirements-lock.txt
 
-python3 Code/verify_all.py               # run the whole tower twice: conservation + determinism
+python3 Code/verify_all.py               # default = the canonical set (the tower + the stage3 smoke)
+python3 Code/verify_all.py --suite all   # the WHOLE Noether claim: canon tower + the stage3 column
 python3 Code/sim_stage2.py               # cognition layer: ON/OFF, conservation, replay
 ```
 
-Stage-3 experiments live under `stage3/` and run standalone, e.g. `python3 stage3/run_artifact_g2v2.py`. The Glass Polis viewer: build a data pack with `stage3/viz_export.py` (see [`viz/glass/README.md`](viz/glass/README.md) for presets — note the exporter defaults to a 6×6 arena; pass `--arena none` for the full field), then serve `viz/glass/`. Each module writes its artifact next to itself; regenerated files and data packs are git-ignored.
+### Test suites (`--suite`)
+
+`verify_all.py` runs a named set of runners twice and checks conservation + determinism. **`--suite all` is the real green light — "the tower is green" is not "Noether is green".**
+
+| suite | what it runs | when |
+|---|---|---|
+| *(no arg)* / `canonical` | the closed tower + probes + the `run_polis` / `run_polis_llm` smoke | the prior default; byte-identical output |
+| `fast` | tower conservation core + a `run_polis` smoke (<~5 min) | CI on every PR/push |
+| `stage3` | the stage3 column gate runners (F/G/G2 vitki, H/H2/H2bis/H3, glass, GC-identity, D/E) | before merging stage3 work |
+| `all` | `canonical` + `stage3` — **the whole claim** | nightly / before a release |
+| `longrun` | the T=3000 degeneracy audit | heavy, local-only, on demand |
+| `llm-offline` | the LLM-tier modules (inert without a key) | when touching the mind layer |
+
+Stage-3 experiments also run standalone, e.g. `python3 stage3/run_artifact_g2v2.py`. The Glass Polis viewer: build a data pack with `stage3/viz_export.py` (see [`viz/glass/README.md`](viz/glass/README.md) for presets — the exporter defaults to a 6×6 arena; pass `--arena none` for the full field), then serve `viz/glass/`. Each module writes its artifact next to itself; regenerated files and data packs are git-ignored.
+
+## Reproducibility — semantic vs bitwise
+
+Two levels, and they are not the same promise:
+
+- **Bitwise (bit-for-bit):** the `state_fingerprint` anchors and byte-identical stdout hold **only inside the locked environment** — **Python 3.13.4, NumPy 2.2.6, Windows 11** ([`requirements-lock.txt`](requirements-lock.txt)). This is what the `MG*/MH*/anchor` gates assert.
+- **Semantic:** on any other Python / NumPy / OS, the **conservation invariants and the scientific findings** still hold; the exact fingerprints may drift by float rounding. `requirements.txt` keeps `numpy>=1.26` for convenience, but the anchors are recorded against the exact pin above — so `>=` never contradicts the bit-for-bit claim: the claim is simply scoped to the lock.
 
 ## Repository layout
 

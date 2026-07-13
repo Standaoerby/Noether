@@ -51,6 +51,7 @@ PROBES (ВСТАВКА-29-class, read-only forensics over the closed tower; NOT 
 Run:  python3 verify_all.py
 """
 
+import argparse
 import hashlib
 import os
 import re
@@ -98,6 +99,53 @@ MODULES = [
     ("../stage3/run_polis_llm", "STAGE-3 mod B (COLUMN): living mind (Claude API) — world deterministic-from-log, mind pluggable, inert without key"),
 ]
 
+# --------------------------------------------------------------------------- #
+#  S1 (WO_consolidation-sprint) — the test-suite registry. `--suite NAME` runs a
+#  named set of runners; with NO argument the modules AND the output are the prior
+#  default (this MODULES list), byte-for-byte. "canonical" == that prior default —
+#  the honest fix for "verify_all green != Noether green": the whole claim is
+#  `--suite all` (canon tower + stage3 column), not the tower alone.
+# --------------------------------------------------------------------------- #
+# stage3 column GATE runners (assert-based, deterministic; invoked relative to Code/
+# like run_polis). Heavier than the tower — they live in `stage3`/`all`, not `fast`.
+_STAGE3 = [
+    ("../stage3/run_artifact_f",   "mod F vitok 1 (vessel): MF-* reservoir gates"),
+    ("../stage3/run_artifact_f2",  "mod F vitok 2 (store+capital): MFv2-* gates"),
+    ("../stage3/run_artifact_f3",  "mod F vitok 3 (settle+vision): MFv3-* gates"),
+    ("../stage3/run_artifact_g",   "mod G (intent vitok 1): MG-* gates"),
+    ("../stage3/run_artifact_g2",  "mod G2 (EXTORT): MG2-* gates"),
+    ("../stage3/run_artifact_g2d", "mod G2 (DELEGATE/REVOKE): MG2D-* gates"),
+    ("../stage3/run_artifact_g2v2","mod G2 vitok 2: MG2V-* gates (incl. reputation anchor)"),
+    ("../stage3/run_glass_v3",     "viz β-3: V3-FP/OLD/AGG/NUM gates"),
+    ("../stage3/run_mark_gc_ident","MG2V-GC-IDENT: dead-oid mark-ledger GC digest"),
+    ("../stage3/run_dunbar_e",     "mod E (Dunbar): ME-* gates"),
+    ("../stage3/run_archipelago_d","mod D (archipelago): MD-* gates"),
+    ("../stage3/run_artifact_h",   "mod H vitok 1 (DEBT): MH-* gates"),
+    ("../stage3/run_artifact_h2",  "mod H vitok 2 (4 confounds): MH2-* gates"),
+    ("../stage3/run_artifact_h2bis","mod H2-bis (K5 + credit channel): MH2B-* gates"),
+    ("../stage3/run_artifact_h3",  "mod H3 (public good + punishment + enforcer): MH3-* gates"),
+]
+
+
+def _by_names(names):
+    """Pull (module, desc) tuples out of MODULES by name, preserving the given order."""
+    idx = {m: (m, d) for m, d in MODULES}
+    return [idx[n] for n in names if n in idx]
+
+
+# fast = the tower's conservation core + one stage3 smoke; tuned for CI (<~5 min).
+_FAST_NAMES = ["sim_core", "sim_ecology", "sim_genetics", "sim_world", "sim_eventlog",
+               "sim_stage2", "../stage3/run_polis"]
+
+SUITES = {
+    "canonical":   MODULES,                                  # the prior default, unchanged
+    "fast":        _by_names(_FAST_NAMES),
+    "stage3":      _by_names(["../stage3/run_polis", "../stage3/run_polis_llm"]) + _STAGE3,
+    "longrun":     [("../stage3/run_longrun", "long-horizon degeneracy audit (heavy; local-only)")],
+    "llm-offline": _by_names(["sim_comm_llm", "../stage3/run_polis_llm"]),
+    "all":         MODULES + _STAGE3,                        # the full Noether claim
+}
+
 # lines worth surfacing: anything about drift/energy/entropy or the success marker
 KEY = re.compile(r"(drift|energy|entropy|invariant|conserv|cline|Bergmann|"
                  r"frontier|dominated|portfolio|buffer|law|faithful|"
@@ -128,13 +176,23 @@ def key_lines(stdout):
 
 
 def main():
+    ap = argparse.ArgumentParser(description="run a named suite of Noether runners twice and "
+                                             "check conservation + determinism")
+    ap.add_argument("--suite", choices=sorted(SUITES), default=None,
+                    help="named runner set (default: the canonical set — prior behaviour). "
+                         "'all' is the full Noether claim (canon tower + stage3 column).")
+    args = ap.parse_args()
+    modules = MODULES if args.suite is None else SUITES[args.suite]
+
     print("=" * 78)
     print("DOUBLE-CHECK: running the whole simulation family")
     print("=" * 78)
+    if args.suite is not None:                               # no-arg output stays byte-identical
+        print(f"suite: {args.suite} ({len(modules)} runners)")
 
     rows = []
     all_ok = True
-    for module, what in MODULES:
+    for module, what in modules:
         try:
             rc1, out1, err1, dt1 = run_once(module)
             rc2, out2, err2, _ = run_once(module)

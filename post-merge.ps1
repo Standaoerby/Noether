@@ -54,4 +54,13 @@ foreach ($b in $branches) {
 # 5) финальный prune + краткий статус
 git fetch --prune origin *> $null
 git status -sb
+
+# 6) S5 — регенерировать PROJECT_STATUS.md (один срез правды для репо и волта)
+try {
+    py scripts/gen_status.py
+    Write-Host "PROJECT_STATUS.md обновлён." -ForegroundColor DarkGray
+} catch {
+    Write-Host "gen_status пропущен: $_" -ForegroundColor Yellow
+}
+
 Write-Host "Готово." -ForegroundColor Green
