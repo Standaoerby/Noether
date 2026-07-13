@@ -69,6 +69,14 @@ class DebtLedger:
         self.claim_inherits = bool(cfg.debt_claim_inherits)   # K1
         self.overdue_ticks = int(cfg.debt_overdue_ticks)      # K4
         self.claim_cost = float(cfg.claim_cost)               # K3 (Polis charges it; debt reads it)
+        self.copresence = bool(cfg.debt_copresence)           # H2-bis decision-4a (credit channel)
+        # the credit channel offsets: own cell only (False) or the substrate's von-Neumann
+        # movement neighbourhood incl. stay (True). Von-Neumann is the EXISTING soседство
+        # (sim_stage2.DIRS = N/S/W/E/stay) — no new geometry.
+        self._channel = (((-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)) if self.copresence
+                         else ((0, 0),))
+        self.n_no_meeting = 0                                  # loans triggered but no creditor met
+        self._loan_meetings: list[tuple] = []                 # (debtor_cell, creditor_cell) per loan
         # ledgers — ALL empty when OFF (=> fingerprint_blob() == b"" => MH-OFF)
         self.debt: dict[tuple[int, int], float] = {}   # (creditor, debtor) -> outstanding (kg)
         self.principal: dict[int, float] = {}          # debtor -> Σ mass handed over (pre-k)
@@ -169,8 +177,22 @@ class DebtLedger:
                 met = self._metabolism(w, a)
                 budget = max(0.0, inc - met)                 # all surplus above metabolism
             else:
-                budget = self.r * inc
-            budget = min(budget, max(0.0, a.body - 1e-12))   # cannot pay more body than one has
+                want = self.r * inc                          # what a stage 1/2 debtor owes this tick
+                # K5 (WO H2-bis §1): DIRECT default test. The payment is made only if the body
+                # AFTER it stays at or above the substrate's survival threshold (DEATH); else the
+                # pawn chooses life — it REFUSES to pay and defaults into bondage. This replaces
+                # the indirect proxy r·income > metabolism ("платёж означает смерть", measured
+                # directly on the projected body, not two surrogate quantities).
+                if want > 0.0 and a.body - want < DEATH:
+                    self._bonded.add(d)
+                    self.n_defaults += 1
+                    self.events.append((t, "debt_default", None, d, 0.0, "bondage"))
+                    w.log.emit(t, "debt_default", "individual", where=(a.i, a.j), actor=d,
+                               dm=0.0, data={"reason": "bondage", "body": round(a.body, 6),
+                                             "want": round(want, 6)})
+                    continue                                 # refused this tick (chose life)
+                budget = want
+            budget = min(budget, max(0.0, a.body - DEATH))   # no payment ever pushes below survival
             if budget <= 0.0:
                 continue
             # pay creditors in oid order until the budget is spent
@@ -230,15 +252,8 @@ class DebtLedger:
                 self.stage.pop(d, None)
                 self._missed.pop(d, None)
                 continue
-            if a is not None and d not in self._bonded:
-                inc = max(0.0, self._income.get(d, 0.0))
-                met = self._metabolism(w, a)
-                if self.r * inc > met:                       # paying = dying => choose life
-                    self._bonded.add(d)
-                    self.n_defaults += 1
-                    self.events.append((t, "debt_default", None, d, 0.0, "bondage"))
-                    w.log.emit(t, "debt_default", "individual",
-                               where=(a.i, a.j), actor=d, dm=0.0, data={"reason": "bondage"})
+            # K5: the default trigger now lives in _pay (a direct body_after >= survival test),
+            # so _update_stages only reads the ladder — no indirect r·income > metabolism proxy.
             if d in self._bonded:
                 self.stage[d] = 3
             elif self._missed.get(d, 0) >= self.overdue_ticks:  # K4: overdue = missed N ticks running
@@ -265,20 +280,28 @@ class DebtLedger:
             reason = self._loan_reason(w, a, owners)
             if reason is None:
                 continue
-            # creditor: co-present maker of a free store, nearest (== same cell) then lowest oid
-            cand = None
-            for other in sorted(bycell.get((a.i, a.j), ()), key=lambda x: x.oid):
-                if other.oid == d:
-                    continue
-                lst = stores.get(other.oid)
-                if lst and any(s.mass > 1e-15 for s in lst):
-                    cand = other.oid
+            # creditor: a co-present maker of a free store within the credit channel (own cell,
+            # then the von-Neumann neighbours when copresence is on), nearest-first then lowest
+            # oid — deterministic. A triggered loan with no creditor in the channel is a MISSED
+            # MEETING (H2-bis §2.2: the measure of how narrow the channel is).
+            cand = None; cand_cell = None
+            for (di, dj) in self._channel:
+                for other in sorted(bycell.get((a.i + di, a.j + dj), ()), key=lambda x: x.oid):
+                    if other.oid == d:
+                        continue
+                    lst = stores.get(other.oid)
+                    if lst and any(s.mass > 1e-15 for s in lst):
+                        cand = other.oid; cand_cell = (a.i + di, a.j + dj)
+                        break
+                if cand is not None:
                     break
             if cand is None:
+                self.n_no_meeting += 1
                 continue
             amount = self._loan_amount(a, reason, stores[cand])
             if amount <= 1e-12:
                 continue
+            self._loan_meetings.append(((a.i, a.j), cand_cell))
             self._issue(w, t, cand, d, amount, k, stores, reason, a)
 
     def _loan_reason(self, w, a, owners):
