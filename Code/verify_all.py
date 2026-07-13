@@ -127,6 +127,15 @@ _STAGE3 = [
 ]
 
 
+# the laboratory twin — OUTSIDE the tower (WO_pg-lab.md): no canon, no polis, and NON-
+# conserving BY DESIGN (the bank creates money, the fine burns it). It carries its own gates
+# (LAB-640 cooperation math, LAB-CONS accounting, LAB-DET determinism) and joins `lab`/`all`,
+# never the conservation-oriented tower suites.
+_LAB = [
+    ("../lab/pg_lab", "pg-lab: LAB-640/CONS/DET (letter's conditions; non-conserving by design)"),
+]
+
+
 def _by_names(names):
     """Pull (module, desc) tuples out of MODULES by name, preserving the given order."""
     idx = {m: (m, d) for m, d in MODULES}
@@ -143,7 +152,8 @@ SUITES = {
     "stage3":      _by_names(["../stage3/run_polis", "../stage3/run_polis_llm"]) + _STAGE3,
     "longrun":     [("../stage3/run_longrun", "long-horizon degeneracy audit (heavy; local-only)")],
     "llm-offline": _by_names(["sim_comm_llm", "../stage3/run_polis_llm"]),
-    "all":         MODULES + _STAGE3,                        # the full Noether claim
+    "lab":         _LAB,                                     # the laboratory twin (outside the tower)
+    "all":         MODULES + _STAGE3 + _LAB,                 # the full Noether claim + the lab twin
 }
 
 # lines worth surfacing: anything about drift/energy/entropy or the success marker

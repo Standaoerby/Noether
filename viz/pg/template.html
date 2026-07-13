@@ -19,6 +19,8 @@
   .sub{color:var(--dim);font-size:13px;margin:0 0 14px}
   .prov{display:inline-block;font-size:11px;color:var(--dim);border:1px solid var(--line);
     border-radius:20px;padding:3px 10px;margin-left:8px;vertical-align:middle}
+  .badge{display:none;font-size:12px;color:var(--gold);border:1px solid var(--gold);
+    border-radius:6px;padding:4px 10px;margin:0 0 10px;background:rgba(255,207,92,.08)}
   section{margin:16px 0}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
   h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0 0 10px;font-weight:600}
@@ -106,6 +108,7 @@
   <h1>Общественное благо<span class="prov" id="prov">одна конкретная симуляция</span></h1>
   <p class="sub">Полевой опыт из письма — дети и подростки в игре на общий банк — разыгран пешками.
      Три мира из одного старта расходятся судьбами.</p>
+  <div class="badge" id="badge"></div>
 
   <section class="card rules">
     <div>
@@ -156,7 +159,7 @@
     </div>
 
     <table class="field" id="field">
-      <thead><tr><th>Сравнение с полем</th><th>люди (письмо)</th><th>пешки (субстрат)</th></tr></thead>
+      <thead><tr><th>Сравнение с полем</th><th>люди (письмо)</th><th id="selfcol">пешки (субстрат)</th></tr></thead>
       <tbody></tbody>
     </table>
     <p class="caption" id="fieldnote"></p>
@@ -175,8 +178,9 @@ const $ = s => document.querySelector(s);
 
 document.getElementById('mmul').textContent = DATA.m;
 document.getElementById('mmul2').textContent = DATA.money_mult;
-document.getElementById('prov').textContent =
-  'одна конкретная симуляция · seed ' + DATA.seed + ' · числа из EventLog';
+if (DATA.badge){const bd=document.getElementById('badge');bd.textContent=DATA.badge;bd.style.display='inline-block';}
+document.getElementById('prov').textContent = DATA.prov_note ||
+  ('одна конкретная симуляция · seed ' + DATA.seed + ' · числа из EventLog');
 
 // max contribution across everything -> a shared bar scale
 let barMax = 0;
@@ -301,6 +305,7 @@ function drawSummary(){
 
   // field comparison
   const f=DATA.field;
+  if (f.self_label) document.getElementById('selfcol').textContent=f.self_label;
   const fb=document.querySelector('#field tbody');
   fb.innerHTML=`
    <tr><td>круг 1 (макс)</td><td>~${f.circle1_max} / ${f.circle1_alt}</td><td>${DATA.worlds.anarchy.final.max.toFixed(0)}</td></tr>
@@ -327,10 +332,10 @@ document.addEventListener('keydown',e=>{
   else if (e.key==='ArrowLeft') go(Math.max(0, cur-1));
 });
 
-document.getElementById('foot').innerHTML =
-  `Витрина mod H3 · public goods · Noether. Каждое число — из EventLog конкретного прогона `+
+document.getElementById('foot').innerHTML = DATA.foot ||
+  (`Витрина mod H3 · public goods · Noether. Каждое число — из EventLog конкретного прогона `+
   `(seed ${DATA.seed}). Это не новый вердикт: robustness (10 сидов) — в WO_stage3-mod-H3.md. `+
-  `Множитель денег ×${DATA.money_mult} (старт тела → 20 денег).`;
+  `Множитель денег ×${DATA.money_mult} (старт тела → 20 денег).`);
 
 drawSummary(); drawCurves();   // prebuild finale so a jump is instant
 go(0);
