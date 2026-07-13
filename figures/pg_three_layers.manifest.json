@@ -1,0 +1,28 @@
+{
+  "commit": "08972a1",
+  "config": {
+    "bank_mult": 2.0,
+    "conditions": "letter: bank x2, closed wallets, no metabolism",
+    "n": 12,
+    "seeds": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "tours": 5
+  },
+  "event_count": 180,
+  "generated_at": "2026-07-13T22:38:47Z",
+  "numpy": "2.2.6",
+  "python": "3.13.4",
+  "runner": "pg_three_layers",
+  "schema": 1,
+  "seed": 7
+}
