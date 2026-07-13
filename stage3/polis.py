@@ -30,7 +30,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from sim_eventlog import SEED
+from sim_eventlog import SEED, DEATH
 from sim_comm import DAYS
 from sim_sphere import GRID_DIAG, CANON_COMM
 from sim_salience import RAD, KK, LAG, FEW, W_INJ, AMT
@@ -229,7 +229,26 @@ class PolisConfig:
     debt_income_drop: float = 0.5  # income_drop trigger: income this tick < this · trailing mean
                                  # income => a shock loan (reason=income_drop). Read ONLY debt_on.
     debt_invest_at: float = None # investment trigger: a fat non-owner (body >= this) may borrow
-                                 # to fund a claim (reason=investment); None => 2·REPRO.
+                                 # to fund a claim (reason=investment); None => 2·REPRO. Read
+                                 # ONLY when claim_cost <= 0 (the vitok-1 degenerate trigger);
+                                 # with claim_cost > 0 the trigger is "borrow to afford a claim".
+    # mod H виток 2 — the four confounds the vitok-1 audit found (WO_stage3-mod-H-vitok2):
+    debt_claim_inherits: bool = False  # K1: a creditor's CLAIM (право требования) passes to its
+                                 # _house heir on death; else the claim on a live debtor lapses
+                                 # (writeoff), the vitok-1 behaviour. Default False keeps vitok 1
+                                 # byte-identical. An asset that outlives the body is the candidate
+                                 # extra-somatic vessel (HH2'). Needs debt_house to find the heir.
+    debt_overdue_ticks: int = 10 # K4: OVERDUE (stage 2) = a debtor missed a payment this many
+                                 # ticks running — NOT the vitok-1 "outstanding>principal", which
+                                 # (k>1) froze every fresh loan at stage 2 from tick one and
+                                 # guaranteed non-repayment. The honest trigger.
+    debt_house: bool = False     # K2: reconstruct _house (mod 25 lineage) from birth events so
+                                 # heirs exist. Default False => no _house => every death writes
+                                 # off (vitok 1). Read-only reconstruction, mass-neutral.
+    claim_cost: float = 0.0      # K3: mass (body->soil) a pawn burns to SEIZE a cell. 0.0 =>
+                                 # canon _do_claims runs verbatim => byte-identical (anchor
+                                 # MH2-OFF). > 0 makes ownership scarce, so credit can buy a
+                                 # SOURCE OF INCOME and the investment trigger comes alive.
 
 
 class Polis(AppropriationWorld):
@@ -363,6 +382,12 @@ class Polis(AppropriationWorld):
         # unless cfg.debt_on => byte-identical to mod G2 (gate MH-OFF). See stage3/debt.py.
         from .debt import DebtLedger
         self._debt = DebtLedger(cfg)
+        # mod H виток 2 K2: reconstruct _house (mod 25 lineage) from birth events so debt
+        # heirs exist. Only built when debt_house — else the attribute is ABSENT, so
+        # getattr(w, "_house", None) is None and every death writes off (vitok 1, anchor-safe).
+        if cfg.debt_house:
+            self._house = {}             # oid -> house root (founder); mirrors sim_inheritance
+            self._house_cursor = 0       # birth-event cursor for lineage reconstruction
 
     # ---- pawn views (thick personalities, deterministic from oid) ---------- #
     def pawn(self, oid) -> Pawn:
@@ -457,6 +482,8 @@ class Polis(AppropriationWorld):
         # payments/loans read this tick's final bodies; income is the canon gain measured
         # across super().step() (redistribution is not income). No-op unless debt_on.
         if self._debt.on:
+            if self.cfg.debt_house:            # K2: fold this tick's births into the lineage map
+                self._update_debt_houses()
             income = {a.oid: max(0.0, a.body - _debt_body0.get(a.oid, a.body))
                       for a in self.pop}
             self._debt.set_income(income)
@@ -493,6 +520,45 @@ class Polis(AppropriationWorld):
         living = {a.oid for a in self.pop}
         self._extort_marks &= living
         self._delegate_marks &= living
+
+    # ---- mod H виток 2 K2: _house reconstruction from birth events (read-only) ---- #
+    def _update_debt_houses(self):
+        """Fold this tick's births into self._house (oid -> founder root), mirroring
+        sim_inheritance._update_houses exactly: a child inherits its parent's house root.
+        Read-only over the logged births, mass-neutral, deterministic — the legal stage-3
+        way to give the Polis a lineage without touching canon or the fingerprint."""
+        ev = self.log.events
+        for i in range(self._house_cursor, len(ev)):
+            e = ev[i]
+            if e.kind == "birth" and e.actor is not None:
+                self._house[e.actor] = self._house.get(e.parent, e.parent)
+        self._house_cursor = len(ev)
+
+    # ---- mod H виток 2 K3: claim costs mass (body -> soil); else canon verbatim ---- #
+    def _do_claims(self):
+        """Seizing a cell costs claim_cost of body (mass -> soil, conserving). claim_cost=0
+        delegates to the canon _do_claims verbatim => byte-identical (anchor MH2-OFF). With a
+        cost, ownership becomes scarce: a pawn too poor to self-fund the seizure must borrow
+        (the K3 investment loop). The dead-owner revert is preserved exactly as canon."""
+        if self.cfg.claim_cost <= 0.0:
+            return super()._do_claims()
+        from collections import defaultdict
+        if self._cell_owner:                              # revert dead owners' cells (canon rule)
+            for c in [c for c, o in self._cell_owner.items() if o not in self.mem]:
+                del self._cell_owner[c]
+        bycell = defaultdict(list)
+        for a in self.pop:
+            bycell[(a.i, a.j)].append(a)
+        cost = float(self.cfg.claim_cost)
+        for cell in sorted(bycell):
+            if cell in self._cell_owner:
+                continue
+            claimant = min(bycell[cell], key=lambda a: a.oid)   # canon claimant = lowest oid
+            if claimant.body - cost < DEATH:                     # cannot afford and survive => no claim
+                continue
+            claimant.body -= cost                                # MASS leaves the body...
+            self.soil[cell[0], cell[1]] += cost                  # ...and returns to the soil
+            self._cell_owner[cell] = claimant.oid
 
     # ---- mod G2: EXTORT — reverse-signed seizure in the shadow of presence ---- #
     def _build_extort_cache(self):

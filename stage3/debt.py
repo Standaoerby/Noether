@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import hashlib
 
-from sim_eventlog import BASE, PEN, REPRO
+from sim_eventlog import BASE, PEN, DEATH, REPRO
 
 
 def _sat(x: float) -> float:
@@ -65,16 +65,24 @@ class DebtLedger:
         self.income_drop = float(cfg.debt_income_drop)
         self.invest_at = (2.0 * REPRO if cfg.debt_invest_at is None
                           else float(cfg.debt_invest_at))
+        # viток 2 knobs (K1/K3/K4)
+        self.claim_inherits = bool(cfg.debt_claim_inherits)   # K1
+        self.overdue_ticks = int(cfg.debt_overdue_ticks)      # K4
+        self.claim_cost = float(cfg.claim_cost)               # K3 (Polis charges it; debt reads it)
         # ledgers — ALL empty when OFF (=> fingerprint_blob() == b"" => MH-OFF)
         self.debt: dict[tuple[int, int], float] = {}   # (creditor, debtor) -> outstanding (kg)
         self.principal: dict[int, float] = {}          # debtor -> Σ mass handed over (pre-k)
         self.stage: dict[int, int] = {}                # debtor -> 1|2|3   (0 free = absent)
         self._bonded: set[int] = set()                 # debtors that have defaulted (stage-3 sticky)
+        self._missed: dict[int, int] = {}              # debtor -> consecutive ticks paid 0 (K4)
         self.issued_k_total = 0.0                      # Σ(amount·k)      — MH-ledger identity
         self.repaid_total = 0.0                        # Σ repaid          — MH-ledger identity
-        self.written_off_total = 0.0                   # Σ burned on heirless death
+        self.written_off_total = 0.0                   # Σ burned (both causes) — ledger identity
+        self.writeoff_debtor = 0.0                     # K1 split: debtor died with no heir
+        self.writeoff_creditor = 0.0                   # K1 split: creditor died (claim not inherited)
         self.n_loans = 0
         self.n_defaults = 0
+        self.n_claim_inherits = 0                      # K1: creditor claims that passed to an heir
         self.reason_counts = {"hunger": 0, "income_drop": 0, "investment": 0}
         self.events: list[tuple] = []                  # (t, kind, creditor, debtor, amount, tag)
         self._income: dict[int, float] = {}            # oid -> income THIS tick (set by Polis)
@@ -149,6 +157,7 @@ class DebtLedger:
         stage 1/2 pay r·income; stage 3 (bondage) pays ALL income above metabolism. Mass is
         conserved: it leaves the debtor's body and enters the creditor's store."""
         debtors = sorted({d for (_c, d) in self.debt})
+        paid = set()                                         # K4: who paid > 0 this tick
         for d in debtors:
             a = living.get(d)
             if a is None:
@@ -182,11 +191,17 @@ class DebtLedger:
                     del self.debt[(c, d)]
                 self.repaid_total += pay
                 budget -= pay
+                paid.add(d)
                 self.events.append((t, "debt_pay", c, d, round(pay, 9), None))
                 w.log.emit(t, "debt_pay", "individual", where=(a.i, a.j), actor=d,
                            dm=pay, data={"creditor": c, "amount": round(pay, 6)})
                 if budget <= 1e-12:
                     break
+        # K4: a debtor that owes but paid 0 this tick misses; a payment resets the streak.
+        for d in debtors:
+            if self._owed_by(d) <= 1e-12:
+                continue
+            self._missed[d] = 0 if d in paid else self._missed.get(d, 0) + 1
 
     def _deposit_to_store(self, w, creditor, amount):
         """body -> the (living) creditor's store. Top up the creditor's oldest live store; if
@@ -213,6 +228,7 @@ class DebtLedger:
             owed = self._owed_by(d)
             if owed <= 1e-12:
                 self.stage.pop(d, None)
+                self._missed.pop(d, None)
                 continue
             if a is not None and d not in self._bonded:
                 inc = max(0.0, self._income.get(d, 0.0))
@@ -225,7 +241,7 @@ class DebtLedger:
                                where=(a.i, a.j), actor=d, dm=0.0, data={"reason": "bondage"})
             if d in self._bonded:
                 self.stage[d] = 3
-            elif owed > self.principal.get(d, 0.0):          # overdue: interest outran repayment
+            elif self._missed.get(d, 0) >= self.overdue_ticks:  # K4: overdue = missed N ticks running
                 self.stage[d] = 2
             else:
                 self.stage[d] = 1
@@ -246,7 +262,7 @@ class DebtLedger:
             st = self.stage.get(d, 0)
             if st >= 2:                                       # overdue/bonded: no new loans
                 continue
-            reason = self._loan_reason(a, owners)
+            reason = self._loan_reason(w, a, owners)
             if reason is None:
                 continue
             # creditor: co-present maker of a free store, nearest (== same cell) then lowest oid
@@ -265,24 +281,38 @@ class DebtLedger:
                 continue
             self._issue(w, t, cand, d, amount, k, stores, reason, a)
 
-    def _loan_reason(self, a, owners):
-        """Return the trigger reason, or None. Priority: hunger > income_drop > investment."""
+    def _loan_reason(self, w, a, owners):
+        """Return the trigger reason, or None. Priority: hunger > income_drop > investment.
+        K3: with claim_cost > 0 the investment trigger becomes PRODUCTIVE — a non-owner
+        standing on an UNOWNED cell but too poor to self-fund the seizure borrows to buy the
+        cell (a source of income). With claim_cost = 0 claims are free, so investment falls
+        back to the vitok-1 degenerate 'a fat non-owner borrows' (structurally ~0)."""
         if a.body < self.hunger_at:
             return "hunger"
         inc = self._income.get(a.oid, 0.0)
         mean = self._income_mean.get(a.oid)
         if mean is not None and mean > 1e-9 and inc < self.income_drop * mean:
             return "income_drop"
-        if a.oid not in owners and a.body >= self.invest_at:
-            return "investment"
+        if a.oid not in owners:
+            if self.claim_cost > 0.0:
+                # productive credit: a fed (not hungry) non-owner too poor to afford a claim
+                # borrows toward ownership — capital accumulation. Fires only when the claim is
+                # dear enough that a non-hungry pawn still cannot self-fund it (claim_cost above
+                # the hunger line); creditor co-presence is still required in _lend.
+                if a.body < self.claim_cost + DEATH:
+                    return "investment"
+            elif a.body >= self.invest_at:
+                return "investment"                           # vitok-1 degenerate (claim free)
         return None
 
     def _loan_amount(self, a, reason, creditor_stores):
         free = sum(s.mass for s in creditor_stores if s.mass > 1e-15)
         if reason == "hunger":
             target = max(0.0, self.hunger_at - a.body)        # lift the body to the hunger line
+        elif reason == "investment" and self.claim_cost > 0.0:
+            target = self.claim_cost + REPRO * 0.5            # the seizure cost + a working buffer
         else:
-            target = REPRO * 0.5                              # a fixed quantum (shock / claim seed)
+            target = REPRO * 0.5                              # a fixed quantum (shock)
         return min(free, target)
 
     def _issue(self, w, t, creditor, debtor, amount, k, stores, reason, a):
@@ -340,36 +370,51 @@ class DebtLedger:
     def is_bonded(self, oid) -> bool:
         return oid in self._bonded
 
-    # ---- DEATH: inheritance by _house, else write-off --------------------- #
+    # ---- DEATH: inheritance by _house, else write-off (split by cause) ----- #
     def _resolve_deaths(self, w, t, living):
+        """Resolve every obligation touching a pawn that died. The DEBTOR side always
+        inherits to a _house heir (the heir pays — vitok-1 behaviour); the CREDITOR side
+        inherits its claim (право требования) to the creditor's heir ONLY when claim_inherits
+        (K1) — else the claim on a live debtor lapses. Both dead => chain to both heirs.
+        Writeoff is split by cause: no debtor heir vs creditor died (K1 measurement)."""
         dead = self._prev_live - set(living)
         if not dead:
             return
-        house = getattr(w, "_house", None)                    # oid -> line id (mod 25), if present
+        house = getattr(w, "_house", None)                    # oid -> line root (mod 25), if present
         for (c, d) in list(self.debt.keys()):
-            amt = self.debt[(c, d)]
-            heir = None
-            if d in dead:
-                heir = self._find_heir(w, d, house, living)
-                del self.debt[(c, d)]
-                if heir is not None and heir != c:
-                    self.debt[(c, heir)] = self.debt.get((c, heir), 0.0) + amt
-                    self.principal[heir] = self.principal.get(heir, 0.0) + self.principal.get(d, 0.0)
-                    if d in self._bonded:
-                        self._bonded.add(heir)                # bondage is inherited with the debt
-                    self.events.append((t, "debt_inherit", c, heir, round(amt, 9), d))
-                else:
-                    self.written_off_total += amt             # no heir => the creditor eats it
-                    self.events.append((t, "debt_writeoff", c, d, round(amt, 9), None))
-            if c in dead and (c, d) in self.debt:
-                # creditor died: the claim on a live debtor lapses (obligation written off)
-                self.written_off_total += self.debt[(c, d)]
-                self.events.append((t, "debt_writeoff", c, d, round(self.debt[(c, d)], 9), "creditor"))
-                del self.debt[(c, d)]
+            if c not in dead and d not in dead:
+                continue
+            amt = self.debt.pop((c, d))
+            nd = d if d not in dead else self._find_heir(w, d, house, living)   # debtor heir (pays)
+            nc = (c if c not in dead
+                  else (self._find_heir(w, c, house, living) if self.claim_inherits else None))
+            if d in dead and nd is None:
+                self.written_off_total += amt; self.writeoff_debtor += amt      # debtor line ended
+                self.events.append((t, "debt_writeoff", c, d, round(amt, 9), "debtor_noheir"))
+                continue
+            if c in dead and nc is None:
+                self.written_off_total += amt; self.writeoff_creditor += amt    # claim died with body
+                self.events.append((t, "debt_writeoff", c, d, round(amt, 9), "creditor"))
+                continue
+            if nc == nd:                                       # heir owes itself => the debt clears
+                self.written_off_total += amt; self.writeoff_debtor += amt
+                self.events.append((t, "debt_writeoff", c, d, round(amt, 9), "self"))
+                continue
+            self.debt[(nc, nd)] = self.debt.get((nc, nd), 0.0) + amt
+            if d in dead:                                      # carry the debtor's books to the heir
+                self.principal[nd] = self.principal.get(nd, 0.0) + self.principal.get(d, 0.0)
+                if d in self._bonded:
+                    self._bonded.add(nd)                       # bondage is inherited with the debt
+                self._missed[nd] = max(self._missed.get(nd, 0), self._missed.get(d, 0))
+                self.events.append((t, "debt_inherit", nc, nd, round(amt, 9), d))
+            if c in dead:                                      # K1: the claim passed to a live heir
+                self.n_claim_inherits += 1
+                self.events.append((t, "debt_claim_inherit", nc, nd, round(amt, 9), c))
         for d in dead:
             self.stage.pop(d, None)
             self.principal.pop(d, None)
             self._bonded.discard(d)
+            self._missed.pop(d, None)
 
     @staticmethod
     def _find_heir(w, dead_oid, house, living):
