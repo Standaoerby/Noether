@@ -255,6 +255,20 @@ class PolisConfig:
     # True => a creditor on a DIRS-adjacent cell may also lend, so credit has more chances to
     # meet — the test of whether the channel was the binding constraint (HHB2). Non-no-op.
     debt_copresence: bool = False
+    # mod H3 — the public good + the punishment organ (WO_stage3-mod-H3). All OFF => byte-
+    # identical. See stage3/publicgood.py. m calibrated in Phase 0 (n≈5 => sweep 1/5/10).
+    pg_on: bool = False          # the deme's common field (contribution -> soil -> m·synergy)
+    pg_m: float = 1.0            # synergy multiplier (efficiency of the pool's soil access)
+    pg_stake: float = 0.005      # a full-propensity contribution unit (kg of body); calibrated
+                                 # (Phase 0) small enough that the m·synergy pump does not
+                                 # explode the reproducing population at m up to 10
+    pg_p0: float = 0.5           # newborn contribution propensity ∈ [0,1]
+    pg_learn: float = 0.1        # reinforcement step for the propensity
+    contrib_visibility: str = "anon"   # anon | signed (can a punisher SEE who under-contributed)
+    punish_on: bool = False      # the sanction organ (majority-of-present, victim -20% -> soil)
+    punish_strategy: str = "min_contrib"   # min_contrib | max_body | coalition (the aiming rule)
+    punish_frac: float = 0.2     # fraction of the victim's body destroyed to soil
+    punish_cost: float = 0.1     # supporters' shared cost of sanctioning (·damage) -> soil
 
 
 class Polis(AppropriationWorld):
@@ -388,6 +402,9 @@ class Polis(AppropriationWorld):
         # unless cfg.debt_on => byte-identical to mod G2 (gate MH-OFF). See stage3/debt.py.
         from .debt import DebtLedger
         self._debt = DebtLedger(cfg)
+        # mod H3: the public-good + punishment organ. Inert unless pg_on. See publicgood.py.
+        from .publicgood import PublicGood
+        self._pg = PublicGood(cfg)
         # mod H виток 2 K2: reconstruct _house (mod 25 lineage) from birth events so debt
         # heirs exist. Only built when debt_house — else the attribute is ABSENT, so
         # getattr(w, "_house", None) is None and every death writes off (vitok 1, anchor-safe).
@@ -494,6 +511,9 @@ class Polis(AppropriationWorld):
                       for a in self.pop}
             self._debt.set_income(income)
             self._debt.tick(self)
+        # mod H3: the public-good + punishment round over co-located demes. No-op unless pg_on.
+        if self._pg.on:
+            self._pg.tick(self)
         if self.cfg.groom is None:
             self._step_voice_moda()            # mod A/B path, verbatim (gate C0)
         elif (getattr(self._policy, "typed", False)
@@ -831,6 +851,9 @@ class Polis(AppropriationWorld):
         # (and asleep-before-first-loan) returns b"", so the term is byte-identical to mod
         # G2 and every anchor is holy (gate MH-OFF).
         blob += self._debt.fingerprint_blob()
+        # mod H3: the public-good/punishment state; empty until the first round => OFF is
+        # byte-identical (gate MH3-OFF).
+        blob += self._pg.fingerprint_blob()
         if not blob:
             return base
         import hashlib
