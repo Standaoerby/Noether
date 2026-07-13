@@ -90,6 +90,8 @@ Two levels, and they are not the same promise:
 - **Bitwise (bit-for-bit):** the `state_fingerprint` anchors and byte-identical stdout hold **only inside the locked environment** — **Python 3.13.4, NumPy 2.2.6, Windows 11** ([`requirements-lock.txt`](requirements-lock.txt)). This is what the `MG*/MH*/anchor` gates assert.
 - **Semantic:** on any other Python / NumPy / OS, the **conservation invariants and the scientific findings** still hold; the exact fingerprints may drift by float rounding. `requirements.txt` keeps `numpy>=1.26` for convenience, but the anchors are recorded against the exact pin above — so `>=` never contradicts the bit-for-bit claim: the claim is simply scoped to the lock.
 
+**Two levels of proof (S2).** Editable stage3 runners emit a machine-readable result with `--json` → `results/<runner>.result.json` (deterministic on a commit; git-ignored): a **`state_hash`** (the world's `state_fingerprint()` — the substrate is identical) and an **`event_hash`** (the same history was produced). Canon `sim_*` modules are not editable and keep the legacy **stdout-SHA256**, which only proves *"the program printed the same bytes twice"* — strictly weaker. `nightly.yml` uploads `results/*.json` as a build artifact.
+
 ## Repository layout
 
 ```
