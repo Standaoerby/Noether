@@ -45,6 +45,18 @@ DEFAULT_SEED = 7
 LEGAL_TPS = (0, 2, 10, 40)           # 0 = pause; RimWorld-style tempo control
 
 
+# --- game session config --------------------------------------------------- #
+def game_config(seed: int) -> PolisConfig:
+    """The GAME's world config (distinct from the science defaults). Stan's call:
+    arena_side=None — the OPEN 14x14 arena. The enclosure box6 is a science mode
+    (it concentrates the population); the game plays the whole grid.
+
+    Stage 1 decision B (enable observability modules: debt/store/pg/dunbar) will
+    attach here once calibrated on THIS open arena — opening the box already
+    shifts demography, so calibration must target the final open config."""
+    return PolisConfig(seed=seed, arena_side=None)
+
+
 # --- command registry ------------------------------------------------------ #
 # Stage 0 has NO world-mutating commands: `pace` and `ping` are control-plane
 # only (see docs/game-architecture.md, WO §1.5). This registry is where Stage 2
@@ -87,7 +99,7 @@ class GameSession:
         # predictable dir; callers may pass an explicit id for concurrent runs.
         self.session_id = session_id or f"s{seed}"
         self.core_commit = _commit()
-        self.cfg = cfg or PolisConfig(seed=seed)
+        self.cfg = cfg or game_config(seed)
         # Guard the canon: the config's seed is the single source of truth.
         object.__setattr__(self.cfg, "seed", seed)
 
@@ -95,12 +107,15 @@ class GameSession:
         self.world = Polis(self.log, self.cfg)
         self._event_cursor = 0        # length-cursor into self.log.events
 
-        # REAL arena geometry (Stage-0 bug: the wrapper hardcoded sim_eventlog's
-        # 5x5 base grid, but the Polis substrate is CommWorld at 14x14). Pawns
-        # roam the FULL substrate — arena_side does NOT clamp position (verified:
-        # with arena_side=6 agents still reach index 13 within a few hundred
-        # ticks). Report soil.shape so no marker falls off and deme = i*cols+j
-        # stays unique across every occupied cell.
+        # REAL arena geometry. Stage-0 bug: the wrapper hardcoded sim_eventlog's
+        # 5x5 base grid, but the Polis substrate is CommWorld at 14x14. The GAME
+        # runs the OPEN arena (game_config sets arena_side=None), so pawns roam
+        # the whole 14x14 and the reported grid must be soil.shape.
+        #   (Correction to an earlier note: arena_side=6 DOES confine — founders
+        #    seed spread across 14x14, then the box pulls them into a 6x6 steady
+        #    state by ~t300. My earlier "max over all ticks = 13" caught that
+        #    startup transient, not a lack of clamping. box6 is a science mode;
+        #    the game uses the open arena — Stan's call, final.)
         soil = getattr(self.world, "soil", None)
         sub_rows, sub_cols = (soil.shape if soil is not None else (14, 14))
         self.rows = int(sub_rows)

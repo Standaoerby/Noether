@@ -143,9 +143,11 @@ def gate_proto() -> bool:
 
 
 def gate_geom() -> bool:
-    """GEOM (Stage 1, task 1.0): every living agent's (x,y) falls inside the
-    reported grid, and deme == y*cols + x with no aliasing. Guards against the
-    Stage-0 5x5 hardcode regressing (real substrate is 14x14)."""
+    """GEOM (Stage 1, task 1.0): on the game's OPEN arena, every living agent's
+    (x,y) falls inside the reported grid, deme == y*cols + x with no aliasing,
+    AND the population actually reaches beyond a 6x6 box (reachability — an
+    anti-regression against a locked/confined world; box6 confines to index<=5,
+    the open arena must exceed it). Guards the Stage-0 5x5 hardcode too."""
     session = GameSession(seed=SEED, session_id="geom",
                           runs_dir=tempfile.mkdtemp(prefix="game_geom_"))
     out_of_grid = 0
@@ -161,9 +163,10 @@ def gate_geom() -> bool:
             if a["deme"] != a["y"] * cols + a["x"]:
                 deme_bad += 1
     session.close()
-    ok = out_of_grid == 0 and deme_bad == 0
+    reach_ok = max_i > 5 or max_j > 5           # not a confined box
+    ok = out_of_grid == 0 and deme_bad == 0 and reach_ok
     print(f"[GEOM] {'PASS' if ok else 'FAIL'} — grid {rows}x{cols}, "
-          f"400 ticks, max(y,x)=({max_i},{max_j}), "
+          f"400 ticks, max(y,x)=({max_i},{max_j}), reach>5={reach_ok}, "
           f"out_of_grid={out_of_grid}, deme_mismatch={deme_bad}")
     return ok
 
