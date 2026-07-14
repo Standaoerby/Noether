@@ -1,0 +1,20 @@
+; Noether game client — Этап 0 (Demerzel, working title)
+; Godot 4.3+ (.NET build). Pure GDScript at Stage 0; C# reserved for hot paths.
+; Contract: ../docs/game-architecture.md · law: ./CLAUDE.md
+
+config_version=5
+
+[application]
+
+config/name="Noether — Demerzel (Stage 0)"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.3")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
