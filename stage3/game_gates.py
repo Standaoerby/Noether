@@ -142,9 +142,36 @@ def gate_proto() -> bool:
     return ok
 
 
+def gate_geom() -> bool:
+    """GEOM (Stage 1, task 1.0): every living agent's (x,y) falls inside the
+    reported grid, and deme == y*cols + x with no aliasing. Guards against the
+    Stage-0 5x5 hardcode regressing (real substrate is 14x14)."""
+    session = GameSession(seed=SEED, session_id="geom",
+                          runs_dir=tempfile.mkdtemp(prefix="game_geom_"))
+    out_of_grid = 0
+    deme_bad = 0
+    max_i = max_j = 0
+    for _ in range(400):
+        snap, _ev = session.step([])
+        rows, cols = snap["meta"]["rows"], snap["meta"]["cols"]
+        for a in snap["agents"]:
+            max_i, max_j = max(max_i, a["y"]), max(max_j, a["x"])
+            if not (0 <= a["x"] < cols and 0 <= a["y"] < rows):
+                out_of_grid += 1
+            if a["deme"] != a["y"] * cols + a["x"]:
+                deme_bad += 1
+    session.close()
+    ok = out_of_grid == 0 and deme_bad == 0
+    print(f"[GEOM] {'PASS' if ok else 'FAIL'} — grid {rows}x{cols}, "
+          f"400 ticks, max(y,x)=({max_i},{max_j}), "
+          f"out_of_grid={out_of_grid}, deme_mismatch={deme_bad}")
+    return ok
+
+
 def main() -> int:
     print("=" * 60)
-    results = {"GAME-DET": gate_det(), "GAME-PROTO": gate_proto()}
+    results = {"GAME-DET": gate_det(), "GAME-PROTO": gate_proto(),
+               "GEOM": gate_geom()}
     print("=" * 60)
     all_ok = all(results.values())
     print(f"gates: {'ALL PASS' if all_ok else 'FAIL'} "

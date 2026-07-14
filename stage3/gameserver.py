@@ -32,7 +32,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from sim_eventlog import EventLog, ROWS, COLS
+from sim_eventlog import EventLog
 from stage3.polis import Polis, PolisConfig
 from stage3.resultjson import _commit
 
@@ -94,6 +94,17 @@ class GameSession:
         self.world = Polis(self.log, self.cfg)
         self._event_cursor = 0        # length-cursor into self.log.events
 
+        # REAL arena geometry (Stage-0 bug: the wrapper hardcoded sim_eventlog's
+        # 5x5 base grid, but the Polis substrate is CommWorld at 14x14). Pawns
+        # roam the FULL substrate — arena_side does NOT clamp position (verified:
+        # with arena_side=6 agents still reach index 13 within a few hundred
+        # ticks). Report soil.shape so no marker falls off and deme = i*cols+j
+        # stays unique across every occupied cell.
+        soil = getattr(self.world, "soil", None)
+        sub_rows, sub_cols = (soil.shape if soil is not None else (14, 14))
+        self.rows = int(sub_rows)
+        self.cols = int(sub_cols)
+
         # session artifacts (manifest + append-only command/hash logs)
         root = runs_dir or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs")
@@ -113,7 +124,7 @@ class GameSession:
             "seed": self.seed,
             "core_commit": self.core_commit,
             "protocol_version": PROTOCOL_VERSION,
-            "grid": {"rows": ROWS, "cols": COLS},
+            "grid": {"rows": self.rows, "cols": self.cols},
             # attribution only — NOT part of GAME-DET (which hashes core state)
             "generated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
@@ -175,7 +186,7 @@ class GameSession:
             "x": int(a.j),           # column -> x
             "y": int(a.i),           # row -> y
             "body": round(float(a.body), 6),
-            "deme": int(a.i) * COLS + int(a.j),   # co-located cell = deme
+            "deme": int(a.i) * self.cols + int(a.j),   # co-located cell = deme
             "flags": flags,
         }
 
@@ -191,8 +202,8 @@ class GameSession:
             "tick": int(w.t),
             "agents": agents,
             "meta": {
-                "rows": ROWS,
-                "cols": COLS,
+                "rows": self.rows,
+                "cols": self.cols,
                 "pop": len(agents),
                 "state_hash": w.state_fingerprint(),
             },

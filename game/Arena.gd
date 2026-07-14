@@ -6,10 +6,18 @@ extends Node2D
 ## Marker jitter uses a COSMETIC rng (seeded per-oid) that never leaves the
 ## client — no client randomness ever flows back into commands.
 
-const CELL_PX := 110.0
-const ORIGIN := Vector2(48, 96)
-const MARKER_R := 9.0
+# Arena is fitted into a viewport box each frame (the substrate is 14x14, too
+# big for a fixed 110px cell). Margins leave room for the top readout, the
+# bottom time-control bar, and the right-side inspector panel.
+const BOX_LEFT := 32.0
+const BOX_TOP := 96.0
+const BOX_RIGHT_FRAC := 0.68        # reserve the right ~third for the inspector
+const BOX_BOTTOM_PAD := 110.0       # clear the button bar
 const JITTER_FRAC := 0.28           # keep co-located agents visually apart
+
+var _cell_px := 36.0                # computed to fit (see _recompute_layout)
+var _origin := Vector2(BOX_LEFT, BOX_TOP)
+var _marker_r := 6.0
 
 # marker colours by role (priority high -> low)
 const C_DEMERZEL := Color("d17bff")
@@ -46,7 +54,23 @@ func ingest_snapshot(snap: Dictionary) -> void:
 
 
 func _process(_delta: float) -> void:
+	_recompute_layout()
 	queue_redraw()                  # redraw every frame so interpolation animates
+
+
+## Fit a rows x cols grid into the viewport box; keep cells square, centred.
+func _recompute_layout() -> void:
+	var vp := get_viewport_rect().size
+	var box_right: float = vp.x * BOX_RIGHT_FRAC
+	var box_bottom: float = vp.y - BOX_BOTTOM_PAD
+	var avail_w: float = maxf(40.0, box_right - BOX_LEFT)
+	var avail_h: float = maxf(40.0, box_bottom - BOX_TOP)
+	_cell_px = maxf(6.0, minf(avail_w / float(cols), avail_h / float(rows)))
+	_marker_r = clampf(_cell_px * 0.18, 2.5, 9.0)
+	var arena_w := _cell_px * cols
+	var arena_h := _cell_px * rows
+	_origin = Vector2(BOX_LEFT + (avail_w - arena_w) * 0.5,
+					  BOX_TOP + (avail_h - arena_h) * 0.5)
 
 
 func agent_data(oid: int) -> Dictionary:
@@ -56,7 +80,7 @@ func agent_data(oid: int) -> Dictionary:
 ## Nearest living marker to a local-space point, within grab radius; -1 if none.
 func pick(local_pos: Vector2) -> int:
 	var best := -1
-	var best_d := CELL_PX * 0.5
+	var best_d := _cell_px * 0.5
 	for oid in _curr.keys():
 		var d := _marker_pos(_curr[oid]).distance_to(local_pos)
 		if d < best_d:
@@ -70,22 +94,22 @@ func _draw() -> void:
 	for oid in _curr.keys():
 		var pos := _interp_pos(int(oid))
 		if selected_oid == int(oid):
-			draw_circle(pos, MARKER_R + 4.0, C_SELECT)
-		draw_circle(pos, MARKER_R, _colour_for(_curr[oid].get("flags", [])))
+			draw_circle(pos, _marker_r + 4.0, C_SELECT)
+		draw_circle(pos, _marker_r, _colour_for(_curr[oid].get("flags", [])))
 
 
 func _draw_grid() -> void:
-	var w := cols * CELL_PX
-	var h := rows * CELL_PX
+	var w := cols * _cell_px
+	var h := rows * _cell_px
 	for c in range(cols + 1):
-		var x := ORIGIN.x + c * CELL_PX
+		var x := _origin.x + c * _cell_px
 		var edge := (c == 0 or c == cols)
-		draw_line(Vector2(x, ORIGIN.y), Vector2(x, ORIGIN.y + h),
+		draw_line(Vector2(x, _origin.y), Vector2(x, _origin.y + h),
 			C_GRID_EDGE if edge else C_GRID, 1.0)
 	for r in range(rows + 1):
-		var y := ORIGIN.y + r * CELL_PX
+		var y := _origin.y + r * _cell_px
 		var edge := (r == 0 or r == rows)
-		draw_line(Vector2(ORIGIN.x, y), Vector2(ORIGIN.x + w, y),
+		draw_line(Vector2(_origin.x, y), Vector2(_origin.x + w, y),
 			C_GRID_EDGE if edge else C_GRID, 1.0)
 
 
@@ -97,8 +121,8 @@ func _interp_pos(oid: int) -> Vector2:
 
 
 func _marker_pos(a: Dictionary) -> Vector2:
-	var base := ORIGIN + Vector2((float(a["x"]) + 0.5) * CELL_PX,
-								 (float(a["y"]) + 0.5) * CELL_PX)
+	var base := _origin + Vector2((float(a["x"]) + 0.5) * _cell_px,
+								  (float(a["y"]) + 0.5) * _cell_px)
 	return base + _jitter(int(a["oid"]))
 
 
@@ -106,7 +130,7 @@ func _jitter(oid: int) -> Vector2:
 	# Deterministic per-agent cosmetic offset — stable frame to frame, and it
 	# stays on the client. Reseed from the oid, not from any core state.
 	_rng.seed = oid
-	var r := CELL_PX * JITTER_FRAC
+	var r := _cell_px * JITTER_FRAC
 	return Vector2(_rng.randf_range(-r, r), _rng.randf_range(-r, r))
 
 
