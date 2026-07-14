@@ -44,14 +44,26 @@ _FRAILTY_PRIME = 2_654_435_761
 _FRAILTY_SALT = 0x0F3A11
 _MASK48 = 0xFFFFFFFFFFFF
 
-# arm -> (n0, k, x0). PLACEHOLDER — Ф2 calibrates to mean≈120. The SHAPE (Gompertz vs
-# Weibull) is a prediction of x0, not a setting: x0>0 -> Gompertz expected; x0=0 -> Weibull.
+# arm -> (n0, k, x0). The SHAPE (Gompertz vs Weibull) is a prediction of x0, not a setting:
+# x0>0 -> Gompertz expected; x0=0 -> Weibull. Ф2 does NOT touch the shape — it binds the two
+# mortal arms to the SAME realized mean (WO §3), so J5 (form at equal mean) is well-posed.
+#
+# CALIBRATION (Ф2, WO §3/§4): the binding condition is flat ≡ gompertz, NOT "≈120". gompertz
+# is left at a sane preset and DEFINES the target τ; only `flat`'s k is tuned to τ ± 2%. The
+# realized mean lives on a NON-STATIONARY substrate (rho=0 is a benign, growing world — mean
+# age-at-death drifts up with T), so the match is T-SPECIFIC: k below is calibrated for the
+# mod-J science config (arena=None field, rho=0 founders) at T=1200, where flat≡gompertz to
+# ≤1.5% on seeds 7/8/9 (gate MJ-MATCH, run_frailty_calib.py). At T=400 the same k drifts to a
+# ~25% gap — flat (constant hazard) and gompertz (accelerating) chase the drift at different
+# rates. Ф3/Ф4 MUST run at the calibration T or MJ-MATCH is void.
 _ARMS = {
     # gompertz control: many blocks + a starting damage load (§5 J1 predicts log-linear μ).
+    # Left at the sane preset — it is the τ-defining arm, never tuned.
     "gompertz": {"n0": 40, "k": 0.02, "x0": 0.10},
     # flat control (§4, Makeham-only): a single block => constant per-tick hazard k =>
-    # geometric (exponential) lifetime, mean 1/k. The reliability machine's degenerate case.
-    "flat": {"n0": 1, "k": 1.0 / 120.0, "x0": 0.0},
+    # geometric lifetime. k tuned (Ф2) so flat's REALIZED mean == gompertz's τ at the science
+    # config/T above (was placeholder 1/120; τ-matched value below).
+    "flat": {"n0": 1, "k": 0.00293, "x0": 0.0},
 }
 
 
@@ -79,11 +91,15 @@ class FrailtyField:
         p = 1.0 - self.x0
         return sum(1 for _ in range(self.n0) if r.random() < p)
 
-    def _capital_of(self, w, oid: int) -> int:
-        # CAPITAL, never body: count of cells this oid owns. If repair depended on body,
-        # frailty would be legible off the substrate again (ВСТАВКА-27). Guarded by rho_rep>0.
+    @staticmethod
+    def _capital_counts(w):
+        # CAPITAL, never body: owned-cell count per oid, computed ONCE per tick (§9). A
+        # per-pawn rescan of _cell_owner was O(pop×cells) (~3.5e8 at pop600×196×3000t) and
+        # bit hard on the rho_rep sweep (J2). If repair depended on body instead, frailty
+        # would be legible off the substrate again (ВСТАВКА-27).
+        from collections import Counter
         co = getattr(w, "_cell_owner", None)
-        return sum(1 for o in co.values() if o == oid) if co else 0
+        return Counter(co.values()) if co else Counter()
 
     # ---- the tick: seed -> age (+optional repair) -> cull -------------------- #
     def tick(self, w):
@@ -103,14 +119,15 @@ class FrailtyField:
             if a.oid not in self._blocks:
                 self._blocks[a.oid] = self._seed_intact(r)
         # 2) age blocks, optional capital-funded repair; collect the exhausted.
+        caps = self._capital_counts(w) if self.rho_rep > 0.0 else None   # §9: once per tick
         dead = []
         for a in pop:
             intact = self._blocks[a.oid]
             if intact > 0:
                 failed = sum(1 for _ in range(intact) if r.random() < self.k)
                 intact -= failed
-                if self.rho_rep > 0.0 and failed > 0:      # the elite-theory repair seam
-                    p_rep = min(1.0, self.rho_rep * self._capital_of(w, a.oid))
+                if caps is not None and failed > 0:        # the elite-theory repair seam
+                    p_rep = min(1.0, self.rho_rep * caps.get(a.oid, 0))
                     if p_rep > 0.0:
                         intact += sum(1 for _ in range(failed) if r.random() < p_rep)
                 self._blocks[a.oid] = intact
