@@ -1,0 +1,92 @@
+{
+  "delegate(box6)": {
+    "final_pop": 37,
+    "final_t": 1000,
+    "fp_stream": "f05bdcabf5c3a143088b8c7a42ad1418",
+    "max_drift": 1.2732925824820995e-11,
+    "next_oid": 8030,
+    "polis_fp": "5a6b047da9c6be23",
+    "senescence_deaths": 0
+  },
+  "delegate(field)": {
+    "final_pop": 162,
+    "final_t": 1000,
+    "fp_stream": "ef6f88dca3c0c6acc79be2d28d3d8d9c",
+    "max_drift": 2.546585164964199e-11,
+    "next_oid": 14976,
+    "polis_fp": "9d86d15f2f1a37d8",
+    "senescence_deaths": 0
+  },
+  "extort_rep(box6)": {
+    "final_pop": 150,
+    "final_t": 1000,
+    "fp_stream": "a7b417164c8e0f4aedc34f4039b47510",
+    "max_drift": 2.546585164964199e-11,
+    "next_oid": 13581,
+    "polis_fp": "0796df066ca6aada",
+    "senescence_deaths": 0
+  },
+  "extort_rep(field)": {
+    "final_pop": 1090,
+    "final_t": 1000,
+    "fp_stream": "182c728a5f5da96a6acb6aeb3315f528",
+    "max_drift": 4.18367562815547e-11,
+    "next_oid": 48657,
+    "polis_fp": "ebddf63ec400d517",
+    "senescence_deaths": 0
+  },
+  "full_g2(box6)": {
+    "final_pop": 95,
+    "final_t": 1000,
+    "fp_stream": "c957ca86cfaf633be6ca2386fcb7f0bb",
+    "max_drift": 2.546585164964199e-11,
+    "next_oid": 11494,
+    "polis_fp": "16ab9530fd7488fd",
+    "senescence_deaths": 0
+  },
+  "full_g2(field)": {
+    "final_pop": 968,
+    "final_t": 1000,
+    "fp_stream": "60840708cd75149041ef141865d2a8d8",
+    "max_drift": 4.3655745685100555e-11,
+    "next_oid": 37423,
+    "polis_fp": "1d6b49d656b2708a",
+    "senescence_deaths": 0
+  },
+  "intent(box6)": {
+    "final_pop": 52,
+    "final_t": 1000,
+    "fp_stream": "a67c8eccb89c192474a942151dda6281",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 9650,
+    "polis_fp": "ef6e10bf83a1ff0e",
+    "senescence_deaths": 0
+  },
+  "intent(field)": {
+    "final_pop": 484,
+    "final_t": 1000,
+    "fp_stream": "f4d42e354767e1d0db238694cf32cefd",
+    "max_drift": 1.8189894035458565e-11,
+    "next_oid": 34584,
+    "polis_fp": "1326a74ef0c1bcc7",
+    "senescence_deaths": 0
+  },
+  "off(box6)": {
+    "final_pop": 37,
+    "final_t": 1000,
+    "fp_stream": "1575012f7dbf6ee6cfe9e6eb7366cfc0",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 6974,
+    "polis_fp": "778abf002d28e726",
+    "senescence_deaths": 0
+  },
+  "off(field)": {
+    "final_pop": 371,
+    "final_t": 1000,
+    "fp_stream": "e4d62fdd1dffe9734d53c75fb2895ee3",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 31875,
+    "polis_fp": "d900862273f61316",
+    "senescence_deaths": 0
+  }
+}

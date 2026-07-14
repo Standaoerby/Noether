@@ -7,7 +7,12 @@ Animal (by oid) — it never replaces it — and adds an arc read over `age`:
     INFANT   age <  A_MAT     (reckless: hunger_caution effectively lowered)
     MATURE   A_MAT<=age<A_OLD  (reproduction, full personality)
     ELDER    age >= A_OLD      (cautious, attention narrows — forgetfulness)
-    death    body < DEATH (canon) OR age >= A_MAX
+    death    body < DEATH (canon) — the ONLY death path an ordinary pawn has.
+
+`is_dead_by_age`/A_MAX below is NOT a life cull: no pawn's death is ever gated on
+age. It is an OFFICE predicate only (mod C reads it to vacate a post — Demerzel,
+voice, dao carrier — never to remove a pawn from the population or deposit its
+body). An ordinary pawn that keeps eating is immortal; the age ceiling never bites.
 
 Phase is a READ-modifier over age — it never performs a mass operation, so matter drift
 stays < 1e-9. Calibration from the tower (seed 7, rho=0 baseline): mean life ~120, median
@@ -21,7 +26,7 @@ from dataclasses import dataclass
 # --- arc calibration (from baseline tower age distribution, seed 7) --------- #
 A_MAT = 20      # infancy -> maturity
 A_OLD = 100     # maturity -> elder (hump [100,200) starts near here)
-A_MAX = 300     # hard age ceiling (== DAYS; body<DEATH usually bites first)
+A_MAX = 300     # office-vacancy age (== DAYS); NOT a life cull — see module docstring
 
 INFANT, MATURE, ELDER = "INFANT", "MATURE", "ELDER"
 
