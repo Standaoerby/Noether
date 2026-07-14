@@ -11,8 +11,12 @@ ONLY on tick boundaries — so (seed + commands.jsonl) replays bit-for-bit
 Contract: docs/game-architecture.md (protocol v1). Any message-shape change
 must edit that file first and bump PROTOCOL_VERSION per its rules.
 
+The server accepts clients in a loop: when one disconnects it returns to
+listening on the SAME session (world/tick/commands.jsonl persist), so a client
+can reconnect and resume. Ctrl+C exits cleanly. --verbose logs full traffic.
+
 Run:  py stage3/gameserver.py                    (from repo root)
-      py stage3/gameserver.py --seed 7 --port 42017
+      py stage3/gameserver.py --seed 7 --port 42017 --verbose
 """
 from __future__ import annotations
 
@@ -208,33 +212,66 @@ class GameServer:
     """One-client TCP loopback server: handshake, pace loop, command buffer."""
 
     def __init__(self, session: GameSession, host: str = DEFAULT_HOST,
-                 port: int = DEFAULT_PORT):
+                 port: int = DEFAULT_PORT, verbose: bool = False):
         self.session = session
         self.host = host
         self.port = port
+        self.verbose = verbose
         self.tps = 0                 # start paused (RimWorld: pause -> act -> release)
         self._buf = b""              # inbound byte buffer (line framing)
         self._cmd_buffer: list = []  # commands awaiting the next tick boundary
+        self._first_snapshot_logged = False
+
+    def _log(self, msg: str) -> None:
+        print(f"[gameserver] {msg}", flush=True)
+
+    def _vlog(self, msg: str) -> None:
+        if self.verbose:
+            print(f"[gameserver] {msg}", flush=True)
+
+    def _reset_connection_state(self) -> None:
+        """Per-client state, cleared between connections. The SESSION (world,
+        tick counter, commands.jsonl) deliberately PERSISTS across reconnects."""
+        self.tps = 0                 # paused until the new client sends pace
+        self._buf = b""
+        self._cmd_buffer = []
+        self._first_snapshot_logged = False
 
     def serve(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((self.host, self.port))
         srv.listen(1)
-        print(f"[gameserver] listening on {self.host}:{self.port} "
-              f"seed={self.session.seed} commit={self.session.core_commit} "
-              f"session={self.session.session_id}", flush=True)
-        conn, addr = srv.accept()
-        print(f"[gameserver] client {addr} connected", flush=True)
+        # short accept timeout so Ctrl+C is responsive even on Windows (a bare
+        # blocking accept() swallows KeyboardInterrupt until a client arrives).
+        srv.settimeout(1.0)
+        self._log(f"listening on {self.host}:{self.port} "
+                  f"seed={self.session.seed} commit={self.session.core_commit} "
+                  f"session={self.session.session_id}"
+                  + ("  [verbose]" if self.verbose else ""))
         try:
-            if not self._handshake(conn):
-                return
-            self._loop(conn)
+            while True:                       # accept loop — survive reconnects
+                try:
+                    conn, addr = srv.accept()
+                except socket.timeout:
+                    continue                  # idle tick; lets Ctrl+C through
+                self._log(f"client {addr} connected "
+                          f"(tick={self.session.world.t})")
+                try:
+                    if self._handshake(conn):
+                        self._loop(conn)
+                except (ConnectionError, OSError) as e:
+                    self._log(f"connection dropped: {e!r}")
+                finally:
+                    conn.close()
+                    self._reset_connection_state()
+                self._log("client gone, listening again")
+        except KeyboardInterrupt:
+            self._log("interrupted (Ctrl+C) — clean shutdown")
         finally:
-            conn.close()
             srv.close()
             self.session.close()
-            print("[gameserver] closed", flush=True)
+            self._log("closed")
 
     # -- handshake ---------------------------------------------------------- #
     def _handshake(self, conn) -> bool:
@@ -259,8 +296,8 @@ class GameServer:
             "seed": self.session.seed,
             "session": self.session.session_id,
         })
-        print(f"[gameserver] handshake ok (client={msg.get('client')} "
-              f"{msg.get('client_version')})", flush=True)
+        self._log(f"handshake ok (client={msg.get('client')} "
+                  f"{msg.get('client_version')})")
         return True
 
     # -- main loop ---------------------------------------------------------- #
@@ -280,6 +317,10 @@ class GameServer:
             if self.tps > 0 and time.monotonic() >= next_tick:
                 snap, events = self.session.step(self._cmd_buffer)
                 self._cmd_buffer = []
+                if not self._first_snapshot_logged:
+                    self._log(f"first snapshot: tick {snap['tick']} "
+                              f"-> {snap['meta']['pop']} agents")
+                    self._first_snapshot_logged = True
                 self._send(conn, snap)
                 if events["items"]:
                     self._send(conn, events)
@@ -292,17 +333,22 @@ class GameServer:
     # -- message handling --------------------------------------------------- #
     def _handle(self, conn, msg: dict) -> None:
         mtype = msg.get("type")
+        self._vlog(f"<- {mtype} {msg}")
         if mtype == "pace":
             tps = msg.get("tps")
             if tps in LEGAL_TPS:
                 self.tps = tps
+                self._log(f"pace accepted: tps={tps}"
+                          + ("  (pause)" if tps == 0 else ""))
             else:
                 self._send(conn, {"type": "error", "code": "bad_pace",
                                   "message": f"tps must be one of {LEGAL_TPS}"})
         elif mtype == "ping":
+            self._log(f"ping accepted: nonce={msg.get('nonce')}")
             self._send(conn, {"type": "pong", "nonce": msg.get("nonce")})
         elif mtype == "commands":
             batch = msg.get("batch") or []
+            self._vlog(f"commands batch: {len(batch)} item(s)")
             self._cmd_buffer.extend(batch)
         elif mtype == "hello":
             self._send(conn, {"type": "error", "code": "already_hello",
@@ -317,9 +363,16 @@ class GameServer:
             data = conn.recv(65536)
         except (BlockingIOError, InterruptedError):
             return True
-        except (ConnectionResetError, ConnectionAbortedError, OSError):
+        except (ConnectionResetError, ConnectionAbortedError) as e:
+            self._log(f"_drain_socket end: connection reset "
+                      f"(errno={getattr(e, 'errno', '?')}) {e!r}")
             return False             # peer vanished (abrupt close) — end cleanly
+        except OSError as e:
+            self._log(f"_drain_socket end: socket error "
+                      f"(errno={getattr(e, 'errno', '?')}) {e!r}")
+            return False
         if not data:
+            self._log("_drain_socket end: empty read (peer closed cleanly)")
             return False             # peer closed
         self._buf += data
         while b"\n" in self._buf:
@@ -352,10 +405,20 @@ class GameServer:
             conn.setblocking(False)
 
     def _send(self, conn, obj) -> None:
+        if self.verbose:
+            t = obj.get("type")
+            if t == "snapshot":
+                self._vlog(f"-> snapshot tick={obj['tick']} "
+                           f"agents={obj['meta']['pop']}")
+            elif t == "events":
+                self._vlog(f"-> events tick={obj['tick']} "
+                           f"items={len(obj['items'])}")
+            else:
+                self._vlog(f"-> {t} {obj}")
         try:
             conn.sendall(_dumps(obj))
-        except OSError:
-            pass
+        except OSError as e:
+            self._log(f"send failed ({t if self.verbose else obj.get('type')}): {e!r}")
 
 
 def main(argv=None) -> int:
@@ -364,15 +427,14 @@ def main(argv=None) -> int:
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--session", default=None, help="session id (default s<seed>)")
+    ap.add_argument("--verbose", action="store_true",
+                    help="log full message traffic (per-frame snapshots/events)")
     args = ap.parse_args(argv)
 
     session = GameSession(seed=args.seed, session_id=args.session)
-    server = GameServer(session, host=args.host, port=args.port)
-    try:
-        server.serve()
-    except KeyboardInterrupt:
-        session.close()
-        print("\n[gameserver] interrupted", flush=True)
+    server = GameServer(session, host=args.host, port=args.port,
+                        verbose=args.verbose)
+    server.serve()               # accept loop; Ctrl+C handled inside
     return 0
 
 

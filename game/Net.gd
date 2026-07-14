@@ -17,9 +17,16 @@ const CLIENT_VERSION := "0.1.0"
 
 enum { STATE_IDLE, STATE_CONNECTING, STATE_HANDSHAKING, STATE_READY, STATE_CLOSED }
 
+# Godot 4.4+ StreamPeerTCP flickers to STATUS_NONE transiently right after data
+# is received (godotengine/godot#62001) even though the link is alive. A single
+# NONE must NOT be read as a disconnect — only STATUS_ERROR, or NONE that
+# persists for this many consecutive polls with no data arriving, is real.
+const NONE_GRACE_POLLS := 120
+
 var _peer := StreamPeerTCP.new()
 var _rx := ""                       # inbound UTF-8 text buffer (line framing)
 var _state: int = STATE_IDLE
+var _none_polls := 0                # consecutive STATUS_NONE polls (no data)
 
 
 func connect_to_server(host: String, port: int) -> void:
@@ -36,32 +43,55 @@ func connect_to_server(host: String, port: int) -> void:
 func _process(_delta: float) -> void:
 	if _state == STATE_IDLE or _state == STATE_CLOSED:
 		return
-	_peer.poll()
+	_peer.poll()                                # refresh status/buffers
 	var status := _peer.get_status()
-	if status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
+
+	# A hard error is always fatal, in any state.
+	if status == StreamPeerTCP.STATUS_ERROR:
 		_fail()
 		return
-	if _state == STATE_CONNECTING and status == StreamPeerTCP.STATUS_CONNECTED:
-		_send({
-			"type": "hello",
-			"protocol_version": PROTOCOL_VERSION,
-			"client": CLIENT_NAME,
-			"client_version": CLIENT_VERSION,
-		})
-		_state = STATE_HANDSHAKING
-	if status == StreamPeerTCP.STATUS_CONNECTED:
-		_read_incoming()
 
-
-func _read_incoming() -> void:
-	var avail := _peer.get_available_bytes()
-	if avail > 0:
-		var res := _peer.get_partial_data(avail)   # [Error, PackedByteArray]
-		if int(res[0]) != OK:
-			_fail()
+	# Still dialing: wait for CONNECTED; only give up if NONE persists.
+	if _state == STATE_CONNECTING:
+		if status == StreamPeerTCP.STATUS_CONNECTED:
+			_none_polls = 0
+			_send({
+				"type": "hello",
+				"protocol_version": PROTOCOL_VERSION,
+				"client": CLIENT_NAME,
+				"client_version": CLIENT_VERSION,
+			})
+			_state = STATE_HANDSHAKING
 			return
-		var bytes: PackedByteArray = res[1]
-		_rx += bytes.get_string_from_utf8()
+		if status == StreamPeerTCP.STATUS_NONE:
+			_none_polls += 1
+			if _none_polls >= NONE_GRACE_POLLS:
+				_fail()
+		return                                  # CONNECTING: keep waiting
+
+	# HANDSHAKING / READY: the link WAS established. Always try to drain buffered
+	# bytes first (data can be readable during a transient NONE), then decide.
+	var read_any := _read_incoming()
+	if status == StreamPeerTCP.STATUS_CONNECTED or read_any:
+		_none_polls = 0                         # healthy (or data still flowing)
+	elif status == StreamPeerTCP.STATUS_NONE:
+		_none_polls += 1                        # transient flicker — ride it out
+		if _none_polls >= NONE_GRACE_POLLS:
+			_fail()
+
+
+## Reads/parses any available lines. Returns true if any bytes were read.
+func _read_incoming() -> bool:
+	var avail := _peer.get_available_bytes()
+	if avail <= 0:
+		return false
+	var res := _peer.get_partial_data(avail)   # [Error, PackedByteArray]
+	if int(res[0]) != OK:
+		return false                           # not fatal on its own; let status decide
+	var bytes: PackedByteArray = res[1]
+	if bytes.is_empty():
+		return false
+	_rx += bytes.get_string_from_utf8()
 	while true:
 		var nl := _rx.find("\n")
 		if nl == -1:
@@ -70,6 +100,7 @@ func _read_incoming() -> void:
 		_rx = _rx.substr(nl + 1)
 		if not line.is_empty():
 			_dispatch(line)
+	return true
 
 
 func _dispatch(line: String) -> void:
@@ -109,7 +140,12 @@ func is_ready_state() -> bool:
 
 
 func _send(obj: Dictionary) -> void:
-	if _peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+	# Send while the link is established. STATUS_NONE can be a transient flicker
+	# (see _process), so don't gate strictly on CONNECTED — only refuse once we've
+	# truly closed or on a hard error. put_data returns an Error; it won't throw.
+	if _state == STATE_CLOSED:
+		return
+	if _peer.get_status() == StreamPeerTCP.STATUS_ERROR:
 		return
 	var payload := (JSON.stringify(obj) + "\n").to_utf8_buffer()
 	_peer.put_data(payload)
