@@ -32,8 +32,9 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from sim_eventlog import EventLog
+from sim_eventlog import EventLog, DEATH, BASE, PEN
 from stage3.polis import Polis, PolisConfig
+from stage3.pawn import phase_of
 from stage3.resultjson import _commit
 
 # --- protocol constants (mirror docs/game-architecture.md) ----------------- #
@@ -181,6 +182,10 @@ class GameSession:
             flags.append("owner")
         if oid == getattr(w, "_demerzel_oid", None):
             flags.append("demerzel")
+        # cheap per-agent scalars for needs/overlays (Stage 1 §1.1), all derived,
+        # none stored as a "need" in the core — thermal comfort = -|gene - T|,
+        # survival margin = body above the starvation floor.
+        mism = float(a.gene) - float(w.T[a.i, a.j])
         return {
             "oid": oid,
             "x": int(a.j),           # column -> x
@@ -188,6 +193,10 @@ class GameSession:
             "body": round(float(a.body), 6),
             "deme": int(a.i) * self.cols + int(a.j),   # co-located cell = deme
             "flags": flags,
+            "age": int(a.age),
+            "phase": phase_of(int(a.age)),
+            "therm": round(-abs(mism), 3),             # 0 = perfectly adapted
+            "margin": round(float(a.body) - DEATH, 4),  # headroom above starvation
         }
 
     def snapshot(self) -> dict:
@@ -217,6 +226,109 @@ class GameSession:
             "tick": int(self.world.t),
             "items": [_event_to_dict(e) for e in new],
         }
+
+    # -- inspector (Stage 1 §1.2): on-demand rich per-pawn detail --------------- #
+    def inspect(self, oid: int) -> dict:
+        """Expensive per-pawn detail (belief/memory/personality/debt), fetched on
+        selection rather than streamed for every pawn every tick. Needs/thoughts
+        are module-free; wealth-beyond-body and debt light up only when those
+        modules are enabled in the game config (else reported off/empty)."""
+        w = self.world
+        a = next((x for x in w.pop if x.oid == oid), None)
+        if a is None:
+            return {"type": "inspect_result", "oid": oid, "alive": False}
+
+        mism = float(a.gene) - float(w.T[a.i, a.j])
+        needs = {
+            "body": round(float(a.body), 4),
+            "margin": round(float(a.body) - DEATH, 4),
+            "age": int(a.age),
+            "phase": phase_of(int(a.age)),
+            "therm": round(-abs(mism), 3),
+            "metabolism": round((BASE + PEN * mism * mism) * float(a.body), 5),
+        }
+
+        mem = getattr(w, "mem", {}).get(oid, {})
+        hears = getattr(w, "from_hearsay", {}).get(oid, set())
+        top_mem = sorted(mem.items(), key=lambda kv: -float(kv[1][0]))[:6]
+        thoughts = {
+            "belief": getattr(w, "belief", {}).get(oid, ""),
+            "mem": [{"cell": [int(c[0]), int(c[1])], "food": round(float(f), 2),
+                     "src": ("heard" if c in hears else "seen")}
+                    for c, (f, _day) in top_mem],
+        }
+
+        try:
+            p = w.pawn(oid).personality
+            personality = {
+                "hunger_caution": round(p.hunger_caution, 3),
+                "deception_lean": round(p.deception_lean, 3),
+                "attention_K": int(p.attention_K),
+                "trust_gate": round(p.trust_gate, 3),
+                "stake_sensitivity": round(p.stake_sensitivity, 3),
+            }
+        except Exception:
+            personality = {}
+
+        return {
+            "type": "inspect_result",
+            "oid": oid,
+            "alive": True,
+            "cell": [int(a.i), int(a.j)],
+            "flags": self._flags_of(a),
+            "needs": needs,
+            "thoughts": thoughts,
+            "personality": personality,
+            "wealth": self._wealth_of(oid, a),
+            "debt": self._debt_of(oid),
+        }
+
+    def _flags_of(self, a) -> list:
+        w, oid, flags = self.world, a.oid, []
+        if oid in getattr(w, "speaker", ()):
+            flags.append("speaker")
+        d = getattr(w, "_debt", None)
+        if d is not None and getattr(self.cfg, "debt_on", False) and d.is_bonded(oid):
+            flags.append("bonded")
+        try:
+            if oid in set(w.owner_ids()):
+                flags.append("owner")
+        except Exception:
+            pass
+        if oid == getattr(w, "_demerzel_oid", None):
+            flags.append("demerzel")
+        return flags
+
+    def _wealth_of(self, oid: int, a) -> dict:
+        """body always; store/capital only when the artifact layer is on."""
+        store = capital = 0.0
+        arts = getattr(self.world, "_artifacts", None)
+        if arts is not None and getattr(self.cfg, "artifacts", False):
+            for art in getattr(arts, "artifacts", []):
+                if getattr(art, "maker_oid", None) != oid:
+                    continue
+                if art.kind == "store":
+                    store += float(art.mass)
+                elif art.kind == "capital":
+                    capital += float(art.mass)
+        return {"body": round(float(a.body), 4),
+                "store": round(store, 4), "capital": round(capital, 4)}
+
+    def _debt_of(self, oid: int) -> dict:
+        if not getattr(self.cfg, "debt_on", False):
+            return {"on": False}
+        d = getattr(self.world, "_debt", None)
+        if d is None:
+            return {"on": False}
+        try:
+            return {
+                "on": True,
+                "stage": int(d.stage.get(oid, 0)),
+                "bonded": bool(d.is_bonded(oid)),
+                "owed": round(float(d._owed_by(oid)), 4),
+            }
+        except Exception:
+            return {"on": True}
 
 
 class GameServer:
@@ -361,6 +473,14 @@ class GameServer:
             batch = msg.get("batch") or []
             self._vlog(f"commands batch: {len(batch)} item(s)")
             self._cmd_buffer.extend(batch)
+        elif mtype == "inspect":
+            oid = msg.get("oid")
+            self._vlog(f"inspect oid={oid}")
+            if isinstance(oid, int):
+                self._send(conn, self.session.inspect(oid))
+            else:
+                self._send(conn, {"type": "error", "code": "bad_inspect",
+                                  "message": "inspect requires int oid"})
         elif mtype == "hello":
             self._send(conn, {"type": "error", "code": "already_hello",
                               "message": "handshake already completed"})

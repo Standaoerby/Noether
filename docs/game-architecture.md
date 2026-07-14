@@ -48,6 +48,7 @@
 | `pace` | `tps:int` (0/2/10/40) | темп; 0 = пауза |
 | `commands` | `batch:[Command]` | буфер действий игрока; применение на границе тика |
 | `ping` | `nonce:int` | здоровье канала |
+| `inspect` | `oid:int` | запрос подробной карточки пешки (Этап 1, минорно); сервер отвечает `inspect_result` |
 
 `Command` (v1, будет расти по этапам):
 `{"cmd":"...", "target":oid|null, "payload":{...}, "client_ts":int}`
@@ -62,9 +63,19 @@
 | `events` | `tick:int, items:[Event]` | новые события EventLog с прошлой выдачи; Event — как в JSONL-экспорте (S7-поля включены) |
 | `pong` | `nonce:int` | ответ на ping |
 | `error` | `code:str, message:str` | внятная ошибка |
+| `inspect_result` | `oid:int, alive:bool, cell, flags, needs, thoughts, personality, wealth, debt` | ответ на `inspect` (Этап 1, минорно); дорогие данные пешки по запросу, не в снапшоте |
 
 `Agent` v1: `{"oid":int, "x":int, "y":int, "body":float, "deme":int,
-"flags":["bonded","speaker",...]}` — расширяется минорно.
+"flags":["bonded","speaker",...]}` — расширяется минорно. **Этап 1 добавил
+(минорно):** `age:int, phase:str(INFANT|MATURE|ELDER), therm:float (0=идеал,
+комфорт=−|gene−T|), margin:float (body над порогом голода DEATH)`.
+
+`inspect_result` (Этап 1): `needs:{body,margin,age,phase,therm,metabolism}`,
+`thoughts:{belief:str, mem:[{cell,food,src:seen|heard}]}`,
+`personality:{hunger_caution,deception_lean,attention_K,trust_gate,
+stake_sensitivity}`, `wealth:{body,store,capital}` (store/capital=0, если слой
+артефактов выключен), `debt:{on:bool[,stage,bonded,owed]}`. Дорогое (belief/
+память/личность) отдаётся ТОЛЬКО по `inspect`, не в каждом снапшоте.
 
 ## Сессия и реплей
 

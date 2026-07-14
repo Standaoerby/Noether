@@ -84,25 +84,25 @@ enforce`, `pg_punish`. Шумные (фильтровать): `cognition` (КА�
 
 ## Задача 1.1 — обогащение снапшота (дешёвые скаляры для needs+оверлеев)
 
-- [ ] **1.1.1** `Agent` v1 доп-поля (аддитивно): `age:int`, `phase:str`,
-      `therm:float` (комфорт = −|gene−T[i,j]|, 0 = идеал), `margin:float`
-      (`body−DEATH`, запас над голодом). Всё дёшево, per-tick, для всех.
-- [ ] **1.1.2** `meta` доп-поля: `tps` (текущий темп), опц. `alive/born/died`
-      счётчики за тик (для HUD). Обновить схему в `docs/game-architecture.md`.
+- [x] **1.1.1** `Agent` доп-поля (аддитивно): `age`, `phase`, `therm`
+      (−|gene−T[i,j]|), `margin` (`body−DEATH`). Дёшево, per-tick, всем.
+      GAME-DET хеш неизменен (read-only проекция).
+- [~] **1.1.2** `meta`-счётчики born/died — отложено к полировке 1.5 (там же
+      появление/смерть). Схема протокола обновлена в `docs/game-architecture.md`
+      (inspect/inspect_result + новые поля Agent).
 
 ## Задача 1.2 — инспектор пешки: needs + thoughts
 
-- [ ] **1.2.1** По клику клиент шлёт `{"type":"inspect","oid":N}`; сервер
-      отвечает `{"type":"inspect_result","oid":N,...}` (НОВАЯ пара сообщений,
-      минорно; дорогие данные — вне снапшота, по запросу). Поля: needs-блок
-      (body/margin/age/phase/therm/metabolism), thoughts-блок (`belief`-строка,
-      топ-N `mem`-клеток с пометкой seen/hearsay), `personality` (5 осей для
-      радара), долговые рёбра (если `debt_on`), последние ≤5 событий агента
-      (уже собираются из потока в Этапе 0).
-- [ ] **1.2.2** Клиент: панель-карточка пешки (Control), радар личности,
-      needs-бары, список мыслей/памяти, лента её событий. Живое обновление
-      выбранной пешки на каждом снапшоте. Зародыш из Этапа 0 — развить до этого,
-      не дальше.
+- [x] **1.2.1** `inspect{oid}` → `inspect_result{...}` (пара сообщений,
+      минорно). Сервер `GameSession.inspect`: needs (body/margin/age/phase/
+      therm/metabolism), thoughts (`belief` + топ-6 `mem`-клеток seen/heard),
+      `personality` (5 осей), `wealth` (body/store/capital), `debt` ({on:false}
+      пока модуль off). Проверено по сокету (Python-клиент); плохой oid → error.
+- [x] **1.2.2** Клиент: `Net.send_inspect`/`inspect_received`; `Main` шлёт
+      inspect по клику и на каждом снапшоте (живое обновление); `Hud`-карточка
+      рендерит needs/thoughts/personality/wealth/debt + ленту событий пешки.
+      Godot 4.7 headless: парс чист, 0 runtime-ошибок. Радар личности — текстом
+      (5 осей); графический радар не тянем на Этапе 0-минимум. Клик-смоук — Стан.
 
 ## Задача 1.3 — оверлеи карты (переключаемые)
 

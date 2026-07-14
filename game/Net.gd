@@ -7,6 +7,7 @@ extends Node
 signal handshaked(info: Dictionary)
 signal snapshot_received(snap: Dictionary)
 signal events_received(ev: Dictionary)
+signal inspect_received(result: Dictionary)
 signal pong(nonce: int)
 signal error_received(err: Dictionary)
 signal closed()
@@ -115,6 +116,8 @@ func _dispatch(line: String) -> void:
 			snapshot_received.emit(msg)
 		"events":
 			events_received.emit(msg)
+		"inspect_result":
+			inspect_received.emit(msg)
 		"pong":
 			pong.emit(int(msg.get("nonce", 0)))
 		"error":
@@ -133,6 +136,10 @@ func send_ping(nonce: int) -> void:
 
 func send_commands(batch: Array) -> void:
 	_send({"type": "commands", "batch": batch})
+
+
+func send_inspect(oid: int) -> void:
+	_send({"type": "inspect", "oid": oid})
 
 
 func is_ready_state() -> bool:

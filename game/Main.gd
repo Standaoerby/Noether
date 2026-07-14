@@ -15,6 +15,7 @@ var _tps := 0
 var _last_speed_tps := START_TPS    # remembered for the Space toggle
 var _accum := 0.0
 var _agent_events: Dictionary = {}  # oid -> Array (last 5 events, from the stream)
+var _selected_inspect: Dictionary = {}   # last inspect_result for the selected pawn
 var _ping_nonce := 0
 
 
@@ -29,6 +30,7 @@ func _ready() -> void:
 	net.handshaked.connect(_on_handshaked)
 	net.snapshot_received.connect(_on_snapshot)
 	net.events_received.connect(_on_events)
+	net.inspect_received.connect(_on_inspect_result)
 	net.error_received.connect(_on_error)
 	net.closed.connect(_on_closed)
 	hud.pace_requested.connect(_set_pace)
@@ -52,9 +54,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		var oid := arena.pick(arena.get_local_mouse_position())
 		arena.selected_oid = oid
 		if oid == -1:
+			_selected_inspect = {}
 			hud.hide_inspector()
 		else:
-			_refresh_inspector(oid)
+			net.send_inspect(oid)        # rich card comes back as inspect_result
 	elif event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_SPACE:
@@ -89,7 +92,7 @@ func _on_snapshot(snap: Dictionary) -> void:
 	hud.set_tick(int(snap.get("tick", 0)))
 	hud.set_pop(int(snap.get("meta", {}).get("pop", 0)))
 	if arena.selected_oid != -1:
-		_refresh_inspector(arena.selected_oid)
+		net.send_inspect(arena.selected_oid)   # live-refresh the open card
 
 
 func _on_events(ev: Dictionary) -> void:
@@ -104,7 +107,16 @@ func _on_events(ev: Dictionary) -> void:
 			arr.pop_front()
 		_agent_events[oid] = arr
 	if arena.selected_oid != -1:
-		_refresh_inspector(arena.selected_oid)
+		_render_card()                         # refresh the events line
+
+
+func _on_inspect_result(r: Dictionary) -> void:
+	if int(r.get("oid", -1)) != arena.selected_oid:
+		return                                 # stale (selection changed)
+	if not bool(r.get("alive", false)):
+		return                                 # pawn died; keep the last card
+	_selected_inspect = r
+	_render_card()
 
 
 func _on_error(err: Dictionary) -> void:
@@ -117,17 +129,12 @@ func _on_closed() -> void:
 	hud.set_status("disconnected")
 
 
-func _refresh_inspector(oid: int) -> void:
-	var a := arena.agent_data(oid)
-	if a.is_empty():
-		return                       # agent no longer alive; keep last panel
-	hud.show_inspector({
-		"oid": oid,
-		"body": a.get("body", 0.0),
-		"deme": a.get("deme", -1),
-		"flags": a.get("flags", []),
-		"events": _agent_events.get(oid, []),
-	})
+func _render_card() -> void:
+	if _selected_inspect.is_empty():
+		return
+	var card := _selected_inspect.duplicate(true)
+	card["events"] = _agent_events.get(arena.selected_oid, [])
+	hud.show_inspector(card)
 
 
 func _speed_label(tps: int) -> String:

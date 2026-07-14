@@ -64,18 +64,63 @@ func set_pop(n: int) -> void:
 
 func show_inspector(info: Dictionary) -> void:
 	var lines := PackedStringArray()
-	lines.append("oid   %d" % int(info.get("oid", -1)))
-	lines.append("body  %.3f" % float(info.get("body", 0.0)))
-	lines.append("deme  %d" % int(info.get("deme", -1)))
+	var cell: Array = info.get("cell", [])
 	var flags: Array = info.get("flags", [])
-	lines.append("flags %s" % ("—" if flags.is_empty() else ", ".join(flags)))
-	lines.append("")
+	lines.append("pawn #%d   @%s" % [int(info.get("oid", -1)), str(cell)])
+	lines.append("flags: %s" % ("—" if flags.is_empty() else ", ".join(flags)))
+
+	var n: Dictionary = info.get("needs", {})
+	if not n.is_empty():
+		lines.append("")
+		lines.append("— needs —")
+		lines.append("phase %s   age %d" % [String(n.get("phase", "?")), int(n.get("age", 0))])
+		lines.append("body %.3f  (margin %.3f)" % [float(n.get("body", 0)), float(n.get("margin", 0))])
+		lines.append("therm %.2f   burn/tick %.4f" % [float(n.get("therm", 0)), float(n.get("metabolism", 0))])
+
+	var th: Dictionary = info.get("thoughts", {})
+	if not th.is_empty():
+		lines.append("")
+		lines.append("— thoughts —")
+		var belief := String(th.get("belief", ""))
+		lines.append("belief: %s" % ("—" if belief.is_empty() else belief))
+		for m in (th.get("mem", []) as Array):
+			lines.append("  %s food %.1f (%s)" % [
+				str(m.get("cell", [])), float(m.get("food", 0)), String(m.get("src", "?"))])
+
+	var w: Dictionary = info.get("wealth", {})
+	if not w.is_empty():
+		var wline := "wealth: body %.3f" % float(w.get("body", 0))
+		if float(w.get("store", 0)) > 0.0 or float(w.get("capital", 0)) > 0.0:
+			wline += "  store %.3f  cap %.3f" % [float(w.get("store", 0)), float(w.get("capital", 0))]
+		lines.append("")
+		lines.append(wline)
+	var d: Dictionary = info.get("debt", {})
+	if not d.is_empty():
+		if bool(d.get("on", false)):
+			lines.append("debt: stage %d  owed %.3f%s" % [
+				int(d.get("stage", 0)), float(d.get("owed", 0)),
+				("  BONDED" if bool(d.get("bonded", false)) else "")])
+		else:
+			lines.append("debt: (module off)")
+
+	var p: Dictionary = info.get("personality", {})
+	if not p.is_empty():
+		lines.append("")
+		lines.append("— personality —")
+		lines.append("caution %.2f  decept %.2f  K %d" % [
+			float(p.get("hunger_caution", 0)), float(p.get("deception_lean", 0)),
+			int(p.get("attention_K", 0))])
+		lines.append("trust %.2f  stake %.2f" % [
+			float(p.get("trust_gate", 0)), float(p.get("stake_sensitivity", 0))])
+
 	var events: Array = info.get("events", [])
-	lines.append("last %d events:" % events.size())
+	lines.append("")
+	lines.append("— last %d events —" % events.size())
 	if events.is_empty():
 		lines.append("  (none seen)")
 	for e in events:
-		lines.append("  t%d  %s" % [int(e.get("t", 0)), String(e.get("kind", "?"))])
+		lines.append("  t%d %s" % [int(e.get("t", 0)), String(e.get("kind", "?"))])
+
 	_inspector_body.text = "\n".join(lines)
 	_inspector.visible = true
 
@@ -86,17 +131,13 @@ func hide_inspector() -> void:
 
 func _build_inspector() -> void:
 	_inspector = Panel.new()
-	_inspector.position = Vector2(920, 12)
-	_inspector.size = Vector2(340, 260)
+	_inspector.position = Vector2(902, 12)
+	_inspector.size = Vector2(366, 470)
 	_inspector.visible = false
 	add_child(_inspector)
-	var title := Label.new()
-	title.text = "pawn"
-	title.position = Vector2(12, 8)
-	_inspector.add_child(title)
 	_inspector_body = Label.new()
-	_inspector_body.position = Vector2(12, 32)
-	_inspector_body.size = Vector2(316, 220)
+	_inspector_body.position = Vector2(12, 10)
+	_inspector_body.size = Vector2(342, 450)
 	_inspector.add_child(_inspector_body)
 
 
