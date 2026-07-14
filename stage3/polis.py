@@ -278,6 +278,18 @@ class PolisConfig:
     punish_strategy: str = "min_contrib"   # min_contrib | max_body | coalition (the aiming rule)
     punish_frac: float = 0.2     # fraction of the victim's body destroyed to soil
     punish_cost: float = 0.1     # supporters' shared cost of sanctioning (·damage) -> soil
+    # mod J (frailty / senescence): a hidden redundancy-block reserve per pawn. "off" =>
+    # the FrailtyField is inert (no side-table, no draw, no cull, empty fingerprint) =>
+    # byte-identical to canon (gate MJ-OFF). "flat" (Makeham-only control, constant hazard)
+    # / "gompertz" (redundancy exhaustion) are the two mortal arms; the (n0,k,x0) overrides
+    # default to the arm preset and are CALIBRATED in Ф2 to mean lifespan ≈ base. Repair
+    # (rho_rep>0) reads CAPITAL only, never body (else the stake is legible; ВСТАВКА-27).
+    # Eating repairs body but NEVER a block. See stage3/frailty.py.
+    frailty: str = "off"                 # off | flat | gompertz
+    frailty_n0: int | None = None        # blocks at birth (None => arm preset)
+    frailty_k: float | None = None       # per-tick per-block failure prob (None => preset)
+    frailty_x0: float | None = None      # initial damage load ∈ [0,1] (None => preset)
+    frailty_rho_rep: float = 0.0         # repair coupling; 0 => the repair seam never fires
 
 
 class Polis(AppropriationWorld):
@@ -414,6 +426,13 @@ class Polis(AppropriationWorld):
         # mod H3: the public-good + punishment organ. Inert unless pg_on. See publicgood.py.
         from .publicgood import PublicGood
         self._pg = PublicGood(cfg)
+        # mod J (frailty): the senescence side-table. Inert (no side-table, no draw, no cull,
+        # empty fingerprint) unless cfg.frailty in {flat,gompertz} => byte-identical to canon
+        # (gate MJ-OFF). Its RNG is a private seeded stream — self.rng never draws. See frailty.py.
+        from .frailty import FrailtyField
+        self._frailty = FrailtyField(
+            cfg.frailty, n0=cfg.frailty_n0, k=cfg.frailty_k, x0=cfg.frailty_x0,
+            rho_rep=cfg.frailty_rho_rep, seed=cfg.seed)
         # mod H виток 2 K2: reconstruct _house (mod 25 lineage) from birth events so debt
         # heirs exist. Only built when debt_house — else the attribute is ABSENT, so
         # getattr(w, "_house", None) is None and every death writes off (vitok 1, anchor-safe).
@@ -487,6 +506,11 @@ class Polis(AppropriationWorld):
         # step (grazing + appropriation − metabolism). No-op unless debt_on.
         _debt_body0 = ({a.oid: a.body for a in self.pop} if self._debt.on else None)
         super().step()                         # full tower + appropriation, unchanged
+        # mod J (frailty): age each pawn's redundancy blocks and cull the exhausted, RIGHT
+        # after the canonical step and BEFORE _gc_mark_ledgers and every consumer — so a
+        # senescence death is swept from the mark-ledgers and seen by the intent/extort/
+        # delegate scans exactly like a canonical starvation death. No-op unless ON (MJ-OFF).
+        self._frailty.tick(self)
         # mod G2 GC: reclaim dead oids from the two mark-ledgers. Canon (sim_comm) has just
         # culled the dead from self.pop; do this BEFORE any consumer (the intent affordance
         # scan, _extort, _delegate) reads a ledger this tick, so the sweep is invisible to
@@ -863,6 +887,10 @@ class Polis(AppropriationWorld):
         # mod H3: the public-good/punishment state; empty until the first round => OFF is
         # byte-identical (gate MH3-OFF).
         blob += self._pg.fingerprint_blob()
+        # mod J (frailty): the block table; empty (b"") when OFF => byte-identical to canon.
+        # Appended LAST so the OFF empty term leaves every prior anchor's bytes untouched
+        # (gate MJ-OFF); when ON it pins the block state so MJ-REPRO catches non-determinism.
+        blob += self._frailty.fingerprint_blob()
         if not blob:
             return base
         import hashlib
