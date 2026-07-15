@@ -444,6 +444,10 @@ class Polis(AppropriationWorld):
         self._frailty = FrailtyField(
             cfg.frailty, n0=cfg.frailty_n0, k=cfg.frailty_k, x0=cfg.frailty_x0,
             rho_rep=cfg.frailty_rho_rep, seed=cfg.seed)
+        # mod K: count of cells passed to a living bloodline heir (or escheat-consolidated)
+        # this run — the MK-INHERIT-FIRES observable. Pure scalar, never fingerprinted; stays
+        # 0 when inherit_off (MK-OFF untouched). Mirrors _delegate_defections/_extorted_total.
+        self._inherit_events = 0
         # mod H виток 2 K2 / mod K: reconstruct _house (mod 25 lineage) from birth events so
         # debt heirs (K2) AND inheritance heirs (mod K) exist. Built when EITHER flag is on —
         # else the attribute is ABSENT, so getattr(w, "_house", None) is None and every death
@@ -645,12 +649,14 @@ class Polis(AppropriationWorld):
             heir = heir_of.get(self.house(owner))
             if heir is not None:                          # living bloodline kin inherits
                 self._cell_owner[cell] = heir
+                self._inherit_events += 1                 # a real succession (MK-INHERIT-FIRES)
             elif self.cfg.heir_fallback == "escheat" and living_owned:
                 best = min(living_owned,                  # nearest living-owned cell consolidates
                            key=lambda co: (abs(co[0][0] - cell[0]) + abs(co[0][1] - cell[1]),
                                            co[1], co[0]))
                 self._cell_owner[cell] = best[1]
-            else:                                         # extinct line -> commons
+                self._inherit_events += 1                 # escheat consolidation counts as firing
+            else:                                         # extinct line -> commons (baseline)
                 del self._cell_owner[cell]
 
     # ---- mod H виток 2 K3: claim costs mass (body -> soil); else canon verbatim ---- #
