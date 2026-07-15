@@ -290,6 +290,17 @@ class PolisConfig:
     frailty_k: float | None = None       # per-tick per-block failure prob (None => preset)
     frailty_x0: float | None = None      # initial damage load ∈ [0,1] (None => preset)
     frailty_rho_rep: float = 0.0         # repair coupling; 0 => the repair seam never fires
+    # mod K (inheritance): a dead owner's cells pass to its lowest-oid LIVING bloodline heir
+    # (same _house root) BEFORE the canon revert, instead of reverting to the commons — the
+    # mod-25 (sim_inheritance) _inherit_dead rule ported into the Polis column. False =>
+    # _inherit_dead never runs => canon revert => byte-identical (gate MK-OFF). Lives ONLY on
+    # the canonical claim path (claim_cost<=0); K and K3 (claim_cost>0) are mutually exclusive
+    # (gate MK-K3-UNTOUCHED). Needs the _house lineage (reuses the K2/mod-H machine). Pure
+    # ledger — reassigns _cell_owner only, zero mass ops (gate MK-MASS < 1e-12). See §2.
+    inherit_on: bool = False
+    heir_fallback: str = "revert"        # revert (heirless cell -> commons, == canon) |
+                                         # escheat (heirless cell consolidates to the NEAREST
+                                         # living owner of any house — mod-25 semantics)
 
 
 class Polis(AppropriationWorld):
@@ -433,10 +444,11 @@ class Polis(AppropriationWorld):
         self._frailty = FrailtyField(
             cfg.frailty, n0=cfg.frailty_n0, k=cfg.frailty_k, x0=cfg.frailty_x0,
             rho_rep=cfg.frailty_rho_rep, seed=cfg.seed)
-        # mod H виток 2 K2: reconstruct _house (mod 25 lineage) from birth events so debt
-        # heirs exist. Only built when debt_house — else the attribute is ABSENT, so
-        # getattr(w, "_house", None) is None and every death writes off (vitok 1, anchor-safe).
-        if cfg.debt_house:
+        # mod H виток 2 K2 / mod K: reconstruct _house (mod 25 lineage) from birth events so
+        # debt heirs (K2) AND inheritance heirs (mod K) exist. Built when EITHER flag is on —
+        # else the attribute is ABSENT, so getattr(w, "_house", None) is None and every death
+        # writes off / reverts (anchor-safe). mod K reuses this same map (§2b).
+        if cfg.debt_house or cfg.inherit_on:
             self._house = {}             # oid -> house root (founder); mirrors sim_inheritance
             self._house_cursor = 0       # birth-event cursor for lineage reconstruction
 
@@ -502,6 +514,14 @@ class Polis(AppropriationWorld):
 
     # ---- the step seam ----------------------------------------------------- #
     def step(self):
+        # mod K / mod H K2: reconstruct the _house lineages BEFORE super().step() — so
+        # _do_claims (inside super) sees fresh lineages when inheritance is on (§2c).
+        # A single call for BOTH flags; the old late call in the debt-block is removed (§2
+        # refinement A). Note: births of THIS tick are emitted INSIDE super().step(), so this
+        # pre-super call folds births up to the PREVIOUS tick — correct for inheritance (heirs
+        # must pre-exist a death); the debt path tolerated the one-tick shift (gate MH-OFF).
+        if (self.cfg.debt_house or self.cfg.inherit_on) and hasattr(self, "_house"):
+            self._update_houses()
         # mod H (DEBT): snapshot bodies so income THIS tick = the gain across the canonical
         # step (grazing + appropriation − metabolism). No-op unless debt_on.
         _debt_body0 = ({a.oid: a.body for a in self.pop} if self._debt.on else None)
@@ -538,8 +558,8 @@ class Polis(AppropriationWorld):
         # payments/loans read this tick's final bodies; income is the canon gain measured
         # across super().step() (redistribution is not income). No-op unless debt_on.
         if self._debt.on:
-            if self.cfg.debt_house:            # K2: fold this tick's births into the lineage map
-                self._update_debt_houses()
+            # (mod K §2c/A) lineage reconstruction moved to step() start — the old
+            # self._update_debt_houses() call here is removed; _house is already fresh.
             income = {a.oid: max(0.0, a.body - _debt_body0.get(a.oid, a.body))
                       for a in self.pop}
             self._debt.set_income(income)
@@ -581,11 +601,18 @@ class Polis(AppropriationWorld):
         self._delegate_marks &= living
 
     # ---- mod H виток 2 K2: _house reconstruction from birth events (read-only) ---- #
-    def _update_debt_houses(self):
+    def house(self, oid):
+        """Founder root of oid's bloodline (mod-25 house()). Founders (no birth event) map to
+        themselves. Defensive getattr so the dynasty metrics can call it even when no lineage
+        map exists (both flags off) — returns oid (self-root). Used by mod-K + metrics."""
+        return getattr(self, "_house", {}).get(oid, oid)
+
+    def _update_houses(self):
         """Fold this tick's births into self._house (oid -> founder root), mirroring
         sim_inheritance._update_houses exactly: a child inherits its parent's house root.
         Read-only over the logged births, mass-neutral, deterministic — the legal stage-3
-        way to give the Polis a lineage without touching canon or the fingerprint."""
+        way to give the Polis a lineage without touching canon or the fingerprint. Shared by
+        mod-H K2 (debt heirs) and mod-K (inheritance); renamed from _update_debt_houses."""
         ev = self.log.events
         for i in range(self._house_cursor, len(ev)):
             e = ev[i]
@@ -593,13 +620,53 @@ class Polis(AppropriationWorld):
                 self._house[e.actor] = self._house.get(e.parent, e.parent)
         self._house_cursor = len(ev)
 
+    # ---- mod K: inheritance — dead owner's cells pass to a living bloodline heir ---- #
+    def _inherit_dead(self):
+        """Before the canon revert, a dead owner's cells pass to its lowest-oid LIVING
+        bloodline heir (same _house root). A faithful copy of sim_inheritance._inherit_dead
+        (module 25) — the ONLY change is heir_fallback lives on cfg. Semantics = 'live' (owner
+        dead = not in self.pop), perception-independent. PURE LEDGER: only _cell_owner is
+        reassigned, zero mass-moving ops (gate MK-MASS < 1e-12). heir_fallback=revert deletes
+        an heirless cell (-> commons, byte-identical to the canon revert-by-mem for that cell,
+        since dead-by-live ⊆ dead-by-mem); escheat consolidates it to the nearest living owner
+        of any house. Runs BEFORE super()._do_claims() so a cell handed to a living heir
+        survives the canon prune; deterministic order (sorted) => hash-seed-invariant."""
+        if not self._cell_owner:
+            return
+        live = {a.oid for a in self.pop}
+        heir_of = {}                          # house root -> lowest-oid living member
+        for a in sorted(self.pop, key=lambda x: x.oid):
+            heir_of.setdefault(self.house(a.oid), a.oid)
+        dead_cells = sorted((c, o) for c, o in self._cell_owner.items() if o not in live)
+        living_owned = None
+        if self.cfg.heir_fallback == "escheat":
+            living_owned = sorted((c, o) for c, o in self._cell_owner.items() if o in live)
+        for cell, owner in dead_cells:
+            heir = heir_of.get(self.house(owner))
+            if heir is not None:                          # living bloodline kin inherits
+                self._cell_owner[cell] = heir
+            elif self.cfg.heir_fallback == "escheat" and living_owned:
+                best = min(living_owned,                  # nearest living-owned cell consolidates
+                           key=lambda co: (abs(co[0][0] - cell[0]) + abs(co[0][1] - cell[1]),
+                                           co[1], co[0]))
+                self._cell_owner[cell] = best[1]
+            else:                                         # extinct line -> commons
+                del self._cell_owner[cell]
+
     # ---- mod H виток 2 K3: claim costs mass (body -> soil); else canon verbatim ---- #
     def _do_claims(self):
         """Seizing a cell costs claim_cost of body (mass -> soil, conserving). claim_cost=0
         delegates to the canon _do_claims verbatim => byte-identical (anchor MH2-OFF). With a
         cost, ownership becomes scarce: a pawn too poor to self-fund the seizure must borrow
-        (the K3 investment loop). The dead-owner revert is preserved exactly as canon."""
+        (the K3 investment loop). The dead-owner revert is preserved exactly as canon.
+
+        mod K: on the canonical (cost-free) path ONLY, inheritance spares heirs' cells BEFORE
+        the canon revert-by-mem. K and K3 (claim_cost>0) are mutually exclusive (gate
+        MK-K3-UNTOUCHED) — mixing live-inheritance with the mem-revert here would double-count
+        cells; K lives at claim_cost=0, exactly where finding #5 was measured."""
         if self.cfg.claim_cost <= 0.0:
+            if self.cfg.inherit_on and getattr(self, "_house", None) is not None:
+                self._inherit_dead()          # reassign to living heirs before canon revert
             return super()._do_claims()
         from collections import defaultdict
         if self._cell_owner:                              # revert dead owners' cells (canon rule)

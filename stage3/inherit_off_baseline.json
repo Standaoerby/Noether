@@ -1,0 +1,114 @@
+{
+  "debt_full(box6)": {
+    "final_pop": 51,
+    "fp_stream": "d2fb311e8e209dcac48861c6fd9580e7",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 6323,
+    "polis_fp": "8eeca29134bd11bb"
+  },
+  "debt_full(field)": {
+    "final_pop": 329,
+    "fp_stream": "0fcf3f21a6d3b648b098cb617297704f",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 28493,
+    "polis_fp": "1b24c06c94ab6e2d"
+  },
+  "debt_house(box6)": {
+    "final_pop": 51,
+    "fp_stream": "d2fb311e8e209dcac48861c6fd9580e7",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 6323,
+    "polis_fp": "8eeca29134bd11bb"
+  },
+  "debt_house(field)": {
+    "final_pop": 329,
+    "fp_stream": "0fcf3f21a6d3b648b098cb617297704f",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 28493,
+    "polis_fp": "1b24c06c94ab6e2d"
+  },
+  "delegate(box6)": {
+    "final_pop": 73,
+    "fp_stream": "9fa229a3a8505c3468bc4c67f26643d8",
+    "max_drift": 1.0913936421275139e-11,
+    "next_oid": 7411,
+    "polis_fp": "73275b967c10c0ff"
+  },
+  "delegate(field)": {
+    "final_pop": 160,
+    "fp_stream": "2a928e0570e2339e960e39d8f7db6feb",
+    "max_drift": 2.3646862246096134e-11,
+    "next_oid": 13693,
+    "polis_fp": "41d472d8593c9098"
+  },
+  "extort_rep(box6)": {
+    "final_pop": 131,
+    "fp_stream": "ceee94955ae7b9ad4b9daf98c70224a9",
+    "max_drift": 2.546585164964199e-11,
+    "next_oid": 12124,
+    "polis_fp": "c882d873942dbf0c"
+  },
+  "extort_rep(field)": {
+    "final_pop": 864,
+    "fp_stream": "f5dcc4b611ee2e0fbc02e6d346b2a750",
+    "max_drift": 3.2741809263825417e-11,
+    "next_oid": 44035,
+    "polis_fp": "695053fc1fe2ba0b"
+  },
+  "frailty(box6)": {
+    "final_pop": 40,
+    "fp_stream": "bad71fa67f3598bdb8d564ceb180edc2",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 5995,
+    "polis_fp": "e458cf2fc1ab8acd"
+  },
+  "frailty(field)": {
+    "final_pop": 289,
+    "fp_stream": "a4bb07a33ba582f4b849e58c685f67b3",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 30259,
+    "polis_fp": "b84ddc201a46cea7"
+  },
+  "full_g2(box6)": {
+    "final_pop": 80,
+    "fp_stream": "580bbefe41f9dff3abaa0da80d9a18cb",
+    "max_drift": 2.3646862246096134e-11,
+    "next_oid": 10445,
+    "polis_fp": "3a800e534b3f6d15"
+  },
+  "full_g2(field)": {
+    "final_pop": 815,
+    "fp_stream": "7abab74e458eb024d07db3a8b0ea38b9",
+    "max_drift": 4.001776687800884e-11,
+    "next_oid": 32393,
+    "polis_fp": "82f11d3174f7044c"
+  },
+  "intent(box6)": {
+    "final_pop": 70,
+    "fp_stream": "48a2f55cdac94989d3e70686590a042c",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 8685,
+    "polis_fp": "378e4618f1ce2c46"
+  },
+  "intent(field)": {
+    "final_pop": 503,
+    "fp_stream": "8d6500f877687b9d9a1222dfd805e0ce",
+    "max_drift": 1.4551915228366852e-11,
+    "next_oid": 31105,
+    "polis_fp": "f334f995baa3bbf8"
+  },
+  "off(box6)": {
+    "final_pop": 51,
+    "fp_stream": "d2fb311e8e209dcac48861c6fd9580e7",
+    "max_drift": 5.4569682106375694e-12,
+    "next_oid": 6323,
+    "polis_fp": "8eeca29134bd11bb"
+  },
+  "off(field)": {
+    "final_pop": 329,
+    "fp_stream": "0fcf3f21a6d3b648b098cb617297704f",
+    "max_drift": 7.275957614183426e-12,
+    "next_oid": 28493,
+    "polis_fp": "1b24c06c94ab6e2d"
+  }
+}
