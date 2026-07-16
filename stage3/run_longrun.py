@@ -274,7 +274,8 @@ def audit(name, label, world, T, drift_budget, out_path, is_polis=False):
     stat_key = None
     stat_since = 0
     owner_set, owner_since, owner_flagged = frozenset(), 0, False
-    top_house, top_house_since, top_house_flagged = None, 0, False    # mod K land-apex (D5)
+    top_house, top_house_since, top_house_flagged = None, 0, False    # mod K land-apex (D5, θ-gated)
+    th_cur, th_run, th_longest, th_longest_share = None, 1, 0, 0.0    # UNGATED top-house freeze
     m0 = float(world.matter_drift())
     ledger_prev = {}
     termination = f"reached T={T}"
@@ -356,6 +357,15 @@ def audit(name, label, world, T, drift_budget, out_path, is_polis=False):
                     top_house, top_house_since, top_house_flagged = th, step, False
             else:
                 top_house, top_house_since, top_house_flagged = None, step, False
+            # UNGATED top-house freeze (L1 first-class number — succession, NOT the θ monopoly
+            # flag): longest consecutive run where the argmax-land house identity is unchanged.
+            th_id = m["top_house"]
+            if th_id is not None and th_id == th_cur:
+                th_run += 1
+                if th_run > th_longest:
+                    th_longest, th_longest_share = th_run, m["top_house_share"]
+            else:
+                th_cur, th_run = th_id, 1
 
             # D6 monotone mechanic leaks — a ledger that only grows
             for k, v in m.items():
@@ -373,6 +383,10 @@ def audit(name, label, world, T, drift_budget, out_path, is_polis=False):
             if (m["owner_share"] is not None and m["owner_share"] != m["owner_share"]
                     and m["n_owners"] > 0):
                 hits["D9"].append((step, f"owner_share NaN with {m['n_owners']} owners, pop {m['pop']}"))
+            # D9 for the mod-K land metrics: a NaN top_house_share while houses actually own land
+            ths = m["top_house_share"]
+            if (ths is not None and ths != ths and m["n_owning_houses"] > 0):
+                hits["D9"].append((step, f"top_house_share NaN with {m['n_owning_houses']} owning houses"))
     finally:
         f.close()
 
@@ -393,6 +407,8 @@ def audit(name, label, world, T, drift_budget, out_path, is_polis=False):
                                         "top_house_share", "n_owning_houses", "max_gen")
                   if k in final},
         "ledgers": {k[4:]: v for k, v in final.items() if k.startswith("led_")},
+        "top_house_freeze": th_longest,               # L1 first-class: succession duration
+        "top_house_freeze_share": round(th_longest_share, 4),
         "detectors": {d: h[:8] for d, h in fired.items()},
         "n_hits": {d: len(h) for d, h in fired.items()},
     }
@@ -436,8 +452,9 @@ def run_set(worlds, T, is_polis, jk=False, rho=0.1, seed=7):
         results.append(res)
         fired = ", ".join(f"{d}×{res['n_hits'][d]}" for d in sorted(res["detectors"])) or "clean"
         fin = res["final"]
-        extra = (f" | osh={fin.get('owner_share')} ths={fin.get('top_house_share')} "
+        extra = (f" | osh={fin.get('owner_share'):.4f} ths={fin.get('top_house_share'):.4f} "
                  f"houses={fin.get('n_owning_houses')} maxGen={fin.get('max_gen')} "
+                 f"freeze={res['top_house_freeze']}t@{res['top_house_freeze_share']} "
                  f"inh={res['ledgers'].get('_inherit_events')}") if jk else ""
         print(f"  {name:>14} [{label[:30]:<30}] {res['termination']:<30} "
               f"pop={res['final_pop']:<4} drift≤{res['peak_drift']:.1e} {res['secs']}s | {fired}{extra}")
