@@ -526,6 +526,7 @@ class Polis(AppropriationWorld):
         # must pre-exist a death); the debt path tolerated the one-tick shift (gate MH-OFF).
         if (self.cfg.debt_house or self.cfg.inherit_on) and hasattr(self, "_house"):
             self._update_houses()
+            self._gc_houses()      # L2a: reclaim dead oids from the lineage map (see below)
         # mod H (DEBT): snapshot bodies so income THIS tick = the gain across the canonical
         # step (grazing + appropriation − metabolism). No-op unless debt_on.
         _debt_body0 = ({a.oid: a.body for a in self.pop} if self._debt.on else None)
@@ -610,6 +611,42 @@ class Polis(AppropriationWorld):
         themselves. Defensive getattr so the dynasty metrics can call it even when no lineage
         map exists (both flags off) — returns oid (self-root). Used by mod-K + metrics."""
         return getattr(self, "_house", {}).get(oid, oid)
+
+    def _gc_houses(self):
+        """L2a (longrun-audit-JK): reclaim dead oids from the _house lineage map, which
+        otherwise grows monotonically with every pawn ever born (audit: 0->40341 at T=3000,
+        ×18 the living pop, no plateau) — the direct analog of the _extort_marks leak.
+
+        REACHABILITY-SAFE, and the timing is the whole point. Unlike _gc_mark_ledgers (a dead
+        mark gates nobody, so it sweeps immediately), house(dead) IS read — _inherit_dead looks
+        up a dead owner's house root to find its bloodline heir. Two reads must survive:
+
+          1. a dead owner whose cells are still in _cell_owner. Canon order is
+             super().step() [starvation deaths] -> _do_claims [inheritance], so a STARVATION
+             death is inherited the same tick; but frailty culls senescence deaths AFTER
+             _do_claims, so a SENESCENCE-dead owner's cells are inherited on tick T+1. Keeping
+             every current _cell_owner value covers both — the entry survives until its estate
+             is actually settled.
+          2. a parent of a birth not yet folded. _update_houses folds tick T's births at the
+             start of T+1 via _house.get(parent); a parent that died during T must still be
+             present then. Calling this GC immediately AFTER _update_houses guarantees it: at
+             prune time every birth is folded, and the parent was alive at the previous prune.
+
+        Everything else is inert: house() = _house.get(oid, oid), so a dropped founder root
+        still resolves to itself, and living pawns keep their own entries. _house is NOT part
+        of state_fingerprint (base+dunbar+artifacts+intent+debt+pg+frailty — no _house term),
+        and the reported metrics read _cell_owner + house(living), so the sweep is
+        behaviourally inert BY CONSTRUCTION — gate MK-HOUSE-GC-IDENT proves it bit-for-bit.
+        No len-gate here (the L2b lesson): membership is rebuilt every tick, and after the
+        first sweep _house stays ~pop, so the cost is O(pop) like any other per-tick pass."""
+        h = getattr(self, "_house", None)
+        if not h:
+            return                                   # OFF / nothing folded yet => free no-op
+        keep = {a.oid for a in self.pop}              # (1) the living
+        co = getattr(self, "_cell_owner", None)
+        if co:
+            keep |= set(co.values())                 # (2) dead owners whose estate is pending
+        self._house = {o: r for o, r in h.items() if o in keep}
 
     def _update_houses(self):
         """Fold this tick's births into self._house (oid -> founder root), mirroring

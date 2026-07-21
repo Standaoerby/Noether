@@ -284,17 +284,50 @@ NULL / подтверждения по пред-регистрации. **Ник
    почти-кладбище» = асимптота институт-24, собственная нить в волте. Ручку мягкости не
    добавляем.
 
-4. **`_house` dead-oid leak** (L2a, аудит J+K 2026-07-15) — **ОТКРЫТ, ждёт решения Стана.**
-   `_house` копит oid каждого когда-либо рождённого (×17–18 живой pop к T=3000), монотонно,
-   без плато. Аналог `_extort_marks`, НО фикс НЕ наивный GC: `house(мёртвого)` читается при
-   разрешении его наследования. Кандидат — timing-safe reachability-прун (чистить мёртвого
-   ПОСЛЕ `_do_claims`). Численная деградация, science-inert, не блокер аудита.
+4. **`_house` dead-oid leak** (L2a, аудит J+K 2026-07-15) — **ЗАКРЫТ 2026-07-16.** Ветка
+   `feat/polis-ledger-gc-v2` (`WO_polis-ledger-gc-v2.md`, Фикс A). `Polis._gc_houses()` прунит
+   `_house` до **reachability-множества** `живые ∪ текущие значения _cell_owner`, вызов сразу
+   ПОСЛЕ `_update_houses()` в начале `step()`. **Тайминг — суть фикса, наивный GC ломает науку:**
+   `house(мёртвого)` читается в `_inherit_dead` при разрешении его наследства, а frailty культит
+   сенесценс-смерти ПОСЛЕ `_do_claims` ⇒ читается на T+1; плюс `_update_houses` на T+1 читает
+   `_house.get(родитель)` для родителя, умершего в T. Первая редакция WO предлагала `keep=живые`
+   в конце `step()` — **фальсифицировано прогоном:** `inherit_events` 2123→**379** (−82%, rho0.1)
+   и 2087→1048 (rho0.5), `polis_fp` сдвинулся, `top_house_share` 0.071→0.103. Выглядело бы
+   «memory-only GC», а тихо переписало бы вердикт K1b. Гейт **MK-HOUSE-GC-IDENT**
+   (`run_house_gc_ident.py`, 13 конфигов: base/nodeath/mortal × rho{0.1,0.5} × {field,box6} +
+   debt_house): fp-поток, `polis_fp`, pop, `owner_share`, `top_house_share`, `n_owning_houses`,
+   `inherit_events` — бит-в-бит. Зубы: `_house` ×3.4–36.4 pop → **×1.0** (17055→1749, 13259→3101,
+   4885→147). OFF-путь (`inherit_on=off`) — строгий no-op. Регресс: MJ-OFF/MASS/REPRO/NOREAD/
+   MATCH/SEED, MK-OFF/MASS/REPRO/K3/INHERIT-FIRES, MG-OFF, MG2V-OFF (семь святынь), V3-FP,
+   `verify_all` — зелёные; dynasty-числа 7/8/9 совпали точно.
 
-5. **`_blocks` len-гейт прун** (L2b, аудит J+K 2026-07-15) — **ОТКРЫТ, мелкий.** `frailty.tick`
-   (стр. 112) прунит `_blocks` по `len!=`, пропуская тик, где рождение и смерть совпадают →
-   ≤20 стойких dead-oid на 69/3000 тиков в `fingerprint_blob` (отпечаток транзиентно грязный,
-   LR-repro цел, самокоррекция). Гигиена отпечатка, не корректность/наука. Кандидат — членский
-   прун (убрать len-гейт).
+5. **`_blocks` len-гейт прун** (L2b, аудит J+K 2026-07-15) — **ЗАКРЫТ 2026-07-16** (та же ветка,
+   Фикс B; решение Стана — делать, вопреки рекомендации отложить). `frailty.tick` прунил `_blocks`
+   по `len!=`, пропуская тик, где рождение и смерть совпадают. Снят len-гейт, прун по членству
+   всегда. **Зубы:** `max(_blocks − pop)` по тикам ≤20 на 69/3000 → **0 на каждом тике**.
+   **Доказано косметикой, не семантикой** (посерийное сравнение до/после, T=3000, PJK-конфиг):
+   pop идентичен каждый тик; ЖИВЫЕ блок-счётчики идентичны каждый тик; senescence-смерти
+   23839=23839, final_pop 2191=2191 (RNG-поток не сдвинут — старение итерируется по `w.pop`, не по
+   `_blocks`, зависший oid розыгрышей не потребляет); `fingerprint_blob` отличается **ровно** на
+   тех 69 тиках (равенство множеств тиков), т.е. разница = удалённые dead-oid подстроки.
+   **РЕ-БЕЙЗЛАЙН fp-якорей (обязательство §7.2 — churn принят осознанно, вот он явно):**
+
+   | файл | запись (конфиг) | поле | было → стало |
+   |---|---|---|---|
+   | `stage3/inherit_off_baseline.json` | `frailty(box6)` | `fp_stream` | `bad71fa67f3598bd…` → `c1c43117db5efaec…` |
+   | `stage3/inherit_off_baseline.json` | `frailty(field)` | `fp_stream` | `a4bb07a33ba582f4…` → `27e99cb3067ba52a…` |
+   | `stage3/house_gc_baseline.json` | `mortal/rho0.1/box6` | `fp_stream` + `polis_fp` | `cd374fda…`→`2532867f…` · `35b09e99ca4379a2`→`35614f4514d868d5` |
+   | `stage3/house_gc_baseline.json` | `mortal/rho0.1/field` | `fp_stream` | `ce10a279…` → `f0081b25…` |
+   | `stage3/house_gc_baseline.json` | `mortal/rho0.5/box6` | `fp_stream` | `73ae7e97…` → `8892de94…` |
+   | `stage3/house_gc_baseline.json` | `mortal/rho0.5/field` | `fp_stream` | `e4b7bad8…` → `cc2c84c6…` |
+
+   Все шесть — **только frailty-ON конфиги** (единственные, где `_blocks` непуст). У каждого
+   разошлись ТОЛЬКО отпечатки: `pop`/`next_oid`/`owner_share`/`top_house_share`/
+   `n_owning_houses`/`inherit_events` **неизменны** (проверено пофайлово). Ни один frailty-OFF
+   якорь не затронут (MJ-OFF зелён — при `frailty=off` `_blocks` пуст). Run-vs-run гейты
+   (MJ-MASS/MJ-REPRO/MJ-NOREAD) зелёные — они сравнивают два прогона одного кода.
+   `house_gc_baseline.json` пересnят при «Фикс A выкл, Фикс B вкл», чтобы MK-HOUSE-GC-IDENT
+   по-прежнему изолировал нейтральность Фикса A.
 
 ## Углубление (3 сида) — ВЫПОЛНЕНО, находки устойчивы
 

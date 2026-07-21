@@ -57,14 +57,14 @@
   },
   "frailty(box6)": {
     "final_pop": 40,
-    "fp_stream": "bad71fa67f3598bdb8d564ceb180edc2",
+    "fp_stream": "c1c43117db5efaeceaec57b9d6cf649d",
     "max_drift": 5.4569682106375694e-12,
     "next_oid": 5995,
     "polis_fp": "e458cf2fc1ab8acd"
   },
   "frailty(field)": {
     "final_pop": 289,
-    "fp_stream": "a4bb07a33ba582f4b849e58c685f67b3",
+    "fp_stream": "27e99cb3067ba52ae1c5b72ab55db99a",
     "max_drift": 7.275957614183426e-12,
     "next_oid": 30259,
     "polis_fp": "b84ddc201a46cea7"

@@ -109,8 +109,15 @@ class FrailtyField:
         # starvation-dead from w.pop; drop their stale blocks so the table never leaks and
         # the fingerprint holds only living oids (the mark-ledger-GC lesson, mod G2).
         living = {a.oid for a in w.pop}
-        if len(self._blocks) != len(living):
-            self._blocks = {o: v for o, v in self._blocks.items() if o in living}
+        # L2b (longrun-audit-JK / WO_polis-ledger-gc-v2 Fix B): prune by MEMBERSHIP, never by
+        # a len-gate. The old `if len(self._blocks) != len(living)` fast-path skipped the sweep
+        # whenever a birth and a death coincided in one tick (count unchanged, membership not),
+        # leaving up to 20 dead oids parked in _blocks on 69/3000 ticks. Those stragglers never
+        # touched dynamics — ageing iterates w.pop (below), not _blocks, so they consumed zero
+        # RNG draws — but fingerprint_blob() serialises sorted(_blocks), so the state fingerprint
+        # transiently encoded dead pawns. Fingerprint hygiene, not correctness; the sweep below
+        # makes _blocks == living every tick.
+        self._blocks = {o: v for o, v in self._blocks.items() if o in living}
         r = self._rng(w.t)
         pop = sorted(w.pop, key=lambda a: a.oid)     # sorted => hash-seed-invariant draws
         # 1) seed any unseen pawn (initial population AND this tick's births) with a fresh,
