@@ -60,19 +60,19 @@
     "top_house_share": 0.107142857143
   },
   "mortal/rho0.1/box6": {
-    "fp_stream": "cd374fda2df0febe4397309d06f55b81",
+    "fp_stream": "2532867fd9e48194e88d6d5fc4de18a3",
     "house_final": 3181,
     "house_peak": 3181,
     "inherit_events": 441,
     "max_drift": 9.094947017729282e-12,
     "n_owning_houses": 12,
     "owner_share": 0.061995128465,
-    "polis_fp": "35b09e99ca4379a2",
+    "polis_fp": "35614f4514d868d5",
     "pop": 299,
     "top_house_share": 0.113636363636
   },
   "mortal/rho0.1/field": {
-    "fp_stream": "ce10a279a4100d6c443430ba2dada417",
+    "fp_stream": "f0081b2564a1ef529a0c7d750a60b28e",
     "house_final": 10720,
     "house_peak": 10720,
     "inherit_events": 2123,
@@ -84,7 +84,7 @@
     "top_house_share": 0.071428571429
   },
   "mortal/rho0.5/box6": {
-    "fp_stream": "73ae7e9734e798b200eafad1ee8fb01d",
+    "fp_stream": "8892de9472f52be21d663c39d2c4d9c5",
     "house_final": 4367,
     "house_peak": 4367,
     "inherit_events": 336,
@@ -96,7 +96,7 @@
     "top_house_share": 0.375
   },
   "mortal/rho0.5/field": {
-    "fp_stream": "e4b7bad86ba822dad58a6f8e69281a64",
+    "fp_stream": "cc2c84c6e1fefab982bb351c6e58509c",
     "house_final": 14050,
     "house_peak": 14050,
     "inherit_events": 2087,
