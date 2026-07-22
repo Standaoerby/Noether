@@ -56,6 +56,14 @@ RENDERED = {
     # mod G2 (β-3): power without ownership — only emitted when the mechanism is on, so on
     # the default showcase they are never seen and never enter meta.rendered (V-complete).
     "extort", "delegate_remit",
+    # faithful ledger (E2): ownership transitions, the rent flow, branding. Emitted ONLY under
+    # `faithful_ledger=True`, so the default showcase never sees them, they never enter
+    # meta.event_types_rendered, and every β-3 anchor stays byte-identical — the same argument
+    # that admitted mod-G2's two kinds above. All SIX are classified, including `inherit` and
+    # `unmark`, of which this scene emits zero: V-complete only complains about kinds it
+    # actually sees, so classifying just the four that show up would leave a trap armed for
+    # the first run with `inherit_on`.
+    "claim", "lose", "inherit", "appropriate", "mark", "unmark",
 }
 IGNORED = {
     "seed",           # founders — drawn implicitly as the t=0 population
@@ -364,8 +372,46 @@ def run_capture(cfg, every):
     return w, snapshots
 
 
+# --------------------------------------------------------------------------- #
+#  E2 — the pawn SLICE mode                                                    #
+# --------------------------------------------------------------------------- #
+# The E1 scene does not fit the film budget: 945 pawns by the end, Dunbar edges growing
+# quadratically (1 468 200 edges over the run), package 57 MB against a 15 MB budget. But ~85%
+# of that weight is what a pawn-slice never draws. The slice keeps the story whole — all 400
+# days, every tick, full precision — and drops only the undrawn.
+#
+# WHAT SURVIVES, AND WHY IT IS NOT FOCUS-FILTERED. `known` is cut to edges touching a focus
+# (×221). Ownership and power events are NOT: they stay GLOBAL. Replaying who owns the cell the
+# focus is standing on needs every claim in the colony, not the focus's own — of 175 claims in
+# this scene only 3 involve the two foci, so a focus-only filter would keep 1.7% of the
+# ownership ledger and the map would disintegrate on the first tick (gate E2-SYNC).
+SLICE_KINDS = {
+    "claim", "lose", "inherit",            # the ownership ledger — GLOBAL, replayed to a map
+    "appropriate", "extort", "delegate_remit",   # the flows — GLOBAL, roles read per event
+    "mark", "unmark",                      # branding — GLOBAL
+    "seed", "birth", "death",              # the population line (reconstruct_live)
+}
+# `seed` is in IGNORED for the film — founders are drawn implicitly as the t=0 population — but
+# the slice needs it as an EVENT: a founder's story opens with "появилась из первого посева",
+# and gate E2-HONEST rightly refused that caption while no event at t=0 licensed it. Its
+# absence also made the population replay silently wrong for founders. 120 rows, nothing.
+
+
+def _slice_guard(out_dir):
+    """The §5.5 invariant, enforced rather than agreed: a slice may NEVER be written into the
+    shipped showcase directory. `viz/glass/data` carries the β-3 anchors (events.jsonl
+    2735d669…); a slice landing there would overwrite them with a filtered package and the
+    anchors would die quietly. Cheap structural guard beats a comment asking nicely."""
+    shipped = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "..", "viz", "glass", "data"))
+    if os.path.normcase(os.path.normpath(os.path.abspath(out_dir))) == os.path.normcase(shipped):
+        raise SystemExit("viz_export: refusing to write a SLICE into the shipped showcase "
+                         f"directory {shipped} — it carries the β-3 anchors. Use "
+                         "viz/slice/data (or any other path).")
+
+
 def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mode="raw",
-           annotate=False, sort_events=False):
+           annotate=False, sort_events=False, slice_foci=None):
     """Export a package. `cfg` (a PolisConfig) overrides the default showcase — used to ship
     the G2 layers and the split-screen presets; when None the default showcase is built from
     seed/days (byte-identical to the shipped film). `events_mode`: "raw" (one line per event,
@@ -375,7 +421,14 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
       * `annotate` — stamp each row with seq / derived / detector_version.
       * `sort_events` — re-order rows by (t, causal_order, seq) for consumers wanting a
         canonical chronology; `seq` still records the original write order, so it is a
-        pure permutation (no row gained or lost)."""
+        pure permutation (no row gained or lost).
+
+    E2 (opt-in): `slice_foci` — a list of oids. Turns the package into a pawn SLICE: events
+    restricted to `SLICE_KINDS` (globally — see the note above), `known` restricted to edges
+    touching a focus, and a `slice` block added to meta. `slice_foci=None` is the default and
+    every existing caller keeps its byte-identical output."""
+    if slice_foci:
+        _slice_guard(out_dir)
     if cfg is None:
         cfg = build_showcase_cfg(seed=seed, days=days)
     else:
@@ -393,6 +446,33 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
             house_ids.add(h)
             filled.append([oid, i, j, body, h, phase])
         snap["pawns"] = filled
+
+    # ---- E2 slice: cut the undrawn, keep the story whole --------------------- #
+    slice_meta = None
+    if slice_foci:
+        foci = sorted(int(o) for o in slice_foci)
+        fset = set(foci)
+        n_ev0, n_edge0 = len(events), 0
+        kept_kinds = sorted({e.kind for e in events} & SLICE_KINDS)
+        dropped_kinds = sorted({e.kind for e in events} - SLICE_KINDS)
+        events = [e for e in events if e.kind in SLICE_KINDS]
+        n_edge1 = 0
+        for snap in snapshots:
+            edges = snap.get("known", ())
+            n_edge0 += len(edges)
+            snap["known"] = [e for e in edges if e[0] in fset or e[1] in fset]
+            n_edge1 += len(snap["known"])
+        slice_meta = {
+            "foci": foci,
+            "event_kinds_kept": kept_kinds,
+            "event_kinds_dropped": dropped_kinds,
+            "n_events_before": n_ev0, "n_events_after": len(events),
+            "known_edges_before": n_edge0, "known_edges_after": n_edge1,
+            # said out loud so a consumer can never mistake a slice for the full film
+            "note": ("pawn slice: ownership/power/branding events are GLOBAL (a focus-only "
+                     "filter would break the ownership replay); `known` is focus-only; "
+                     "positions come from snapshots, so `move` is dropped as elsewhere"),
+        }
 
     # event-type completeness: every emitted type must be classified (gate V-complete)
     seen_types = sorted({e.kind for e in events})
@@ -418,10 +498,31 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
         "delegate_root": (int(w._delegate_root) if w._delegate_root is not None else None),
         "guard_ids": sorted(int(o) for o in (w._extort_enforcer_ids | w._delegate_enforcer_ids)),
     }
+    if slice_meta is not None:
+        meta["slice"] = slice_meta
 
     os.makedirs(out_dir, exist_ok=True)
     files = {}
     files["meta.json"] = (_dumps(meta) + "\n").encode("utf-8")
+    if slice_foci:
+        # the slice directory is SELF-CONTAINED: the front needs one path, not two. Lazy
+        # import — pawn_card imports `_Houses` from this module, so a top-level import would
+        # be circular. The card is the E1 artifact verbatim (same reader, same SHA), so slice
+        # and card can never tell two different stories about the same pawn.
+        from stage3.pawn_card import (pawn_card as _card, narrate_card, _arc_of,
+                                      arc_evidence, event_captions)
+        cards = {}
+        for oid in sorted(int(o) for o in slice_foci):
+            c = _card(w.log, snapshots, oid)
+            # `captions` sits in the ENTRY, never inside `card`: the card is the E1 artifact
+            # and its SHA is a settled anchor (aa87881cc8b26a60 / c538e24f8f08817b). A caption
+            # layer added in E2 must not move an anchor accepted in E1.
+            cards[str(oid)] = {"card": c, "arc": _arc_of(c),
+                               "arc_evidence": arc_evidence(c),
+                               "narrative": narrate_card(c),
+                               "captions": event_captions(w.log, oid)}
+        files["cards.json"] = (_dumps({"foci": sorted(int(o) for o in slice_foci),
+                                       "entries": cards}) + "\n").encode("utf-8")
     files["snapshots.jsonl"] = ("".join(_dumps(s) + "\n" for s in snapshots)).encode("utf-8")
     if events_mode == "agg":
         agg = _aggregate_events(events)
@@ -434,9 +535,14 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
             _dumps(_event_row(e, seq=seq, annotate=annotate)) + "\n"
             for seq, e in indexed)).encode("utf-8")
 
+    # `cards.json` only exists for a slice, so the showcase's file list — and therefore its
+    # package SHA — is unchanged; for a slice the card is PART of the artifact and must be
+    # inside the anchor, or the front could be served a card from a different run.
+    names = ("meta.json", "snapshots.jsonl", "events.jsonl") + (
+        ("cards.json",) if "cards.json" in files else ())
     shas = {}
     total = 0
-    for name in ("meta.json", "snapshots.jsonl", "events.jsonl"):
+    for name in names:
         blob = files[name]
         with open(os.path.join(out_dir, name), "wb") as fh:
             fh.write(blob)
@@ -444,7 +550,7 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
         total += len(blob)
 
     pkg = hashlib.sha256()
-    for name in ("meta.json", "snapshots.jsonl", "events.jsonl"):
+    for name in names:
         pkg.update(files[name])
     package_sha = pkg.hexdigest()
 
@@ -452,7 +558,7 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
         print(f"glass-polis export -> {out_dir}")
         print(f"  seed={seed} days={days} every={every}  grid={grid_rows}x{grid_cols}  "
               f"M0={meta['M0']}  fp={w.state_fingerprint()}")
-        for name in ("meta.json", "snapshots.jsonl", "events.jsonl"):
+        for name in names:
             print(f"  {name:<16} {len(files[name]):>10} B  sha {shas[name][:16]}")
         print(f"  package          {total:>10} B  ({total/1e6:.2f} MB / 15 MB budget)")
         print(f"  package SHA-256  {package_sha}")
@@ -482,9 +588,18 @@ def main():
     ap.add_argument("--compliance", type=float, default=0.5)
     ap.add_argument("--extort-enforcers", type=int, default=0)
     ap.add_argument("--delegate-enforcers", type=int, default=0)
+    # faithful ledger (E2): without it the journal carries no ownership transition and no rent
+    # flow, so a pawn-slice would have nothing to draw. Default OFF keeps β-3 byte-identical.
+    ap.add_argument("--faithful-ledger", action="store_true", dest="faithful_ledger")
+    # E2: --slice 58,42 turns the package into a pawn slice and defaults the output to
+    # viz/slice/data — never the shipped showcase (guarded, not merely defaulted).
+    ap.add_argument("--slice", type=str, default=None, dest="slice_foci",
+                    help="comma-separated focal oids -> pawn-slice package (E2)")
     args = ap.parse_args()
-    out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "..", "viz", "glass", "data")
+    foci = ([int(x) for x in args.slice_foci.split(",") if x.strip()]
+            if args.slice_foci else None)
+    default_out = ("..", "viz", "slice", "data") if foci else ("..", "viz", "glass", "data")
+    out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), *default_out)
     out = os.path.normpath(out)
     arena = None if str(args.arena).lower() == "none" else int(args.arena)
     cfg = build_showcase_cfg(
@@ -492,8 +607,10 @@ def main():
         extort_on=args.extort, delegate_on=args.delegate, revoke_tooth=args.tooth,
         delegate_m=args.m, delegate_compliance_dl=args.compliance,
         extort_enforcers=args.extort_enforcers, delegate_enforcers=args.delegate_enforcers)
+    # a slice without the ledger would have no ownership transition and no rent flow to draw
+    cfg.faithful_ledger = args.faithful_ledger or bool(foci)
     export(out, every=args.every, cfg=cfg, events_mode=args.events,
-           annotate=args.annotate, sort_events=args.sort_events)
+           annotate=args.annotate, sort_events=args.sort_events, slice_foci=foci)
 
 
 if __name__ == "__main__":
