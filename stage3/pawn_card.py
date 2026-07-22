@@ -7,19 +7,28 @@ new data and nothing mutates the world — every function is a pure fold/query o
 `stage3/polis.py` are untouched; the reader lives outside the world classes (the glass
 pattern), so a run under this reader keeps its fingerprint (gate E1-VOFF).
 
-SOURCE SPLIT (Ф0 finding, WO §7 revision) — the cards divide by SOURCE, not by convenience:
-  * LOG-derived  — Chronicle, HouseHistory, RelationshipHistory. Cheap; the log is not lossy
-    for births/deaths, so these carry the E1-FAITHFUL guarantee (line reconstructed from the
-    log == `reconstruct_live` at every checkpoint).
-  * SNAPSHOT-derived — PropertyHistory. The log has NO ownership trail at all: there is no
-    claim / inherit / appropriate / revert event anywhere, yet cells change hands and mass is
-    appropriated. Ownership lives only in `_cell_owner`, surfaced per snapshot as `owners`.
-    Its correctness rests on the read-only guarantee (V-OFF), not on a log cross-check —
-    comparing a snapshot against itself would be vacuous, so that subgate was dropped.
+SOURCE SPLIT — the cards divide by SOURCE, not by convenience:
+  * LOG-derived  — Chronicle, HouseHistory, RelationshipHistory, PropertyHistory. Cheap; the
+    log is not lossy for these, so they carry the E1-FAITHFUL guarantee (what the log replays
+    == the real thing at every checkpoint).
+  * SNAPSHOT-derived — only the co-location half of RelationshipHistory ("who stood beside
+    whom"), which no event records.
 
-Виток 1 (this module): Chronicle · House · Relationship · Property.
-Виток 2 (deferred, WO §7.3): ReputationHistory (marks-as-state) and full PowerFlowHistory
-(the dominant appropriation flow emits no event — blocked on the "faithful ledger" WO).
+ВИТОК 2 moved Property to the log. In виток 1 the journal had NO ownership trail at all — no
+claim / inherit / lose event existed — so ownership could only be read out of the per-snapshot
+`owners` mirror of `_cell_owner`, and the E1-FAITHFUL subgate had to be dropped as vacuous
+(a snapshot compared against itself). The faithful-ledger WO fixed the source, not the reader:
+`faithful_ledger=True` makes Polis mirror ownership into the log, and Property is now folded
+from claim/lose/inherit ALONE. The snapshot path is deleted — one source, no dual path.
+
+Reading the ledger correctly needs one non-obvious thing. A cell handed straight from X to Y
+emits `claim actor=Y data{from:X}` and NO `lose` for X — the loss is implicit in `from`. So a
+per-oid scan (`events where actor==oid`) would silently keep cells the pawn no longer owns.
+Property therefore replays the GLOBAL cell->owner map and filters, which is also what makes
+the gate meaningful: the same replay must equal `_cell_owner` tick by tick.
+
+Виток 1: Chronicle · House · Relationship · Property(snapshots).
+Виток 2: Property(log) · Reputation · PowerFlow.
 
 Determinism: every projection returns plain sorted/rounded data; `pawn_card()` stamps a
 SHA-256 over the canonical dump (sorted keys, compact separators) — same run, same card
@@ -193,40 +202,110 @@ def relationship_history(log, snapshots, oid):
 
 
 # --------------------------------------------------------------------------- #
-#  4. PropertyHistory — SNAPSHOT-derived (the log has no ownership trail)      #
+#  4. PropertyHistory — LOG-derived (виток 2: the ledger IS the ownership)     #
 # --------------------------------------------------------------------------- #
-def property_history(snapshots, oid):
-    """Ownership over time, folded into tenures. Built from the per-snapshot `owners` field
-    because NO claim/inherit/revert event exists anywhere in the journal (Ф0)."""
-    timeline, held_ticks = [], 0
-    for s in snapshots:
-        cells = sorted((i, j) for (i, j, o) in s.get("owners", ()) if o == oid)
-        if cells:
-            held_ticks += 1
-        timeline.append((s["t"], cells))
-    # fold into tenures: maximal runs of consecutive snapshots with a non-empty holding
-    tenures, cur = [], None
-    for t, cells in timeline:
-        if cells and cur is None:
-            cur = {"from_t": t, "to_t": t, "peak_cells": len(cells), "cells_seen": set(cells)}
-        elif cells:
-            cur["to_t"] = t
+LEDGER_KINDS = ("claim", "lose", "inherit")
+
+
+def replay_owners(events, upto=None):
+    """The ownership ledger replayed from claim/lose/inherit ALONE -> {cell: owner}.
+
+    This is the whole faithfulness claim in four lines: if the log is a mirror of Polis, this
+    dict equals `w._cell_owner` at every tick (gate E1-FAITHFUL-OWN). `claim` and `inherit`
+    both SET the owner (a transfer X->Y is one `claim` carrying `from`), `lose` clears the
+    cell back to the commons."""
+    owner = {}
+    for e in events:
+        if upto is not None and e.t > upto:
+            break
+        if e.kind == "claim" or e.kind == "inherit":
+            owner[tuple(e.where)] = e.actor
+        elif e.kind == "lose":
+            owner.pop(tuple(e.where), None)
+    return owner
+
+
+def property_history(log, oid, t_end=None):
+    """Ownership over time, folded into tenures — LOG-derived (виток 2).
+
+    Folds the global replay (see `replay_owners`) tick by tick and keeps only the ticks where
+    THIS pawn's holding changed; the holding is constant in between, so tenures/ticks/series
+    are exact, not sampled. `acts` is the part snapshots could never give: not just that a
+    cell changed hands but HOW and WITH WHOM — claim / inherit(from) / lose, and the mirror
+    roles `taken` (someone claimed a cell out from under this pawn) and `bequeathed` (a cell
+    of this pawn's estate passed to an heir)."""
+    ev = [e for e in log.events if e.kind in LEDGER_KINDS]
+    if t_end is None:
+        t_end = max((e.t for e in log.events), default=0)
+    owner, held, acts, changes = {}, set(), [], []
+    i, n = 0, len(ev)
+    while i < n:
+        t = ev[i].t
+        j = i
+        while j < n and ev[j].t == t:
+            e = ev[j]
+            cell = tuple(e.where)
+            prev = owner.get(cell)
+            frm = (e.data or {}).get("from")
+            if e.kind == "lose":
+                owner.pop(cell, None)
+                if prev == oid:
+                    acts.append([t, "lose", list(cell), None])
+            else:
+                owner[cell] = e.actor
+                if e.actor == oid:
+                    acts.append([t, e.kind, list(cell),
+                                 int(frm) if frm is not None else None])
+                elif prev == oid:
+                    # the cell left this pawn without a `lose`: seized, or passed on at death
+                    acts.append([t, "taken" if e.kind == "claim" else "bequeathed",
+                                 list(cell), int(e.actor)])
+            j += 1
+        now = {c for c, o in owner.items() if o == oid}
+        if now != held:
+            held = now
+            changes.append((t, sorted(now)))
+        i = j
+
+    # fold the change-points into tenures. A change at t holds until the tick before the next
+    # change (or to the end of the run), so the tick count is exact rather than sampled.
+    tenures, series, held_ticks, cur = [], [], 0, None
+    for idx, (t, cells) in enumerate(changes):
+        nxt = changes[idx + 1][0] if idx + 1 < len(changes) else None
+        span_end = (nxt - 1) if nxt is not None else t_end
+        if not cells:
+            if cur is not None:
+                cur["cells_seen"] = [list(c) for c in sorted(cur["cells_seen"])]
+                tenures.append(cur); cur = None
+            continue
+        held_ticks += max(0, span_end - t + 1)
+        series.append([t, len(cells)])
+        if span_end > t:
+            series.append([span_end, len(cells)])
+        if cur is None:
+            cur = {"from_t": t, "to_t": span_end, "peak_cells": len(cells),
+                   "cells_seen": set(cells)}
+        else:
+            cur["to_t"] = max(cur["to_t"], span_end)
             cur["peak_cells"] = max(cur["peak_cells"], len(cells))
             cur["cells_seen"] |= set(cells)
-        elif cur is not None:
-            cur["cells_seen"] = [list(c) for c in sorted(cur["cells_seen"])]
-            tenures.append(cur); cur = None
     if cur is not None:
         cur["cells_seen"] = [list(c) for c in sorted(cur["cells_seen"])]
         tenures.append(cur)
-    peak = max((len(c) for _t, c in timeline), default=0)
+
+    kinds = {}
+    for _t, k, _c, _o in acts:
+        kinds[k] = kinds.get(k, 0) + 1
     return {
+        "source": "log",                      # виток 2: no snapshot touches this projection
         "tenures": tenures,
         "n_tenures": len(tenures),
         "ticks_holding": held_ticks,
-        "peak_cells": peak,
-        "final_cells": [list(c) for c in (timeline[-1][1] if timeline else [])],
-        "series": [[t, len(c)] for t, c in timeline if c],   # sparse: only ticks with land
+        "peak_cells": max((len(c) for _t, c in changes), default=0),
+        "final_cells": [list(c) for c in (changes[-1][1] if changes else [])],
+        "series": series,                     # step function: [t_in, n], [t_out, n] per span
+        "acts": acts,                         # [t, kind, [i,j], other_oid]
+        "n_acts": kinds,                      # claim/inherit/lose/taken/bequeathed counts
     }
 
 
@@ -243,8 +322,8 @@ def pawn_card(log, snapshots, oid):
         "chronicle": chronicle(log, oid),
         "house": house_history(log, oid, houses=H),
         "relationships": relationship_history(log, snapshots, oid),
-        "property": property_history(snapshots, oid),
-        "deferred": ["ReputationHistory", "PowerFlowHistory"],   # виток 2 (WO §7.3)
+        "property": property_history(log, oid),
+        "deferred": ["ReputationHistory", "PowerFlowHistory"],   # виток 2 Ф2
     }
     card["sha"] = card_sha(card)
     return card
