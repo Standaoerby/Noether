@@ -111,6 +111,14 @@
   </div>
 
   <div id="side">
+    <div class="sec" id="focusSec" style="display:none">
+      <h3>Пешка <span id="fOid"></span> <span id="fArc" class="modebadge"></span></h3>
+      <div id="fWhy" class="k" style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 6px"></div>
+      <div class="mrow"><span>владеет клетками</span><b id="fCells">—</b></div>
+      <div class="mrow"><span>жива</span><b id="fAlive">—</b></div>
+      <div id="fNarr" class="k" style="max-height:150px;overflow:auto;white-space:pre-wrap;
+           border-left:2px solid var(--gold);padding-left:7px;margin-top:6px"></div>
+    </div>
     <div class="sec">
       <h3>Инвариант — персонаж</h3>
       <div class="mrow"><span>|Σ − M0|</span><span id="mInv" class="plaque ok">—</span></div>
@@ -193,11 +201,21 @@ const gx=cG.getContext("2d"), mx=cM.getContext("2d"), fx=cF.getContext("2d");
 // β-3: a ?data=DIR URL param lets one renderer load any package dir (default ./data) — the
 // split-screen embeds two of these as iframes and drives them through the postMessage API.
 const DATA_DIR=(new URLSearchParams(location.search).get("data")||"./data").replace(/\/$/,"");
+// ---- E2 pawn-slice mode -------------------------------------------------- //
+// `?focus=58` follows ONE pawn: it is ringed on the map, its owned cells are outlined, its
+// card docks in the side panel — all driven by the SAME scrub as the film, because the whole
+// point of the slice is that map, card and caption reduce to one tick (gate E2-SYNC).
+const FOCUS=(()=>{const v=new URLSearchParams(location.search).get("focus");
+  return v===null||v===""?null:parseInt(v,10);})();
 async function tryFetch(){
   try{
     const meta = await (await fetch(DATA_DIR+"/meta.json",{cache:"no-store"})).json();
     const snapT = await (await fetch(DATA_DIR+"/snapshots.jsonl",{cache:"no-store"})).text();
     const evT   = await (await fetch(DATA_DIR+"/events.jsonl",{cache:"no-store"})).text();
+    // E2: a SLICE package ships its card alongside the data, so the front needs one path.
+    // Absent on the showcase -> the fetch simply fails and slice mode stays off.
+    try{ S.cards = await (await fetch(DATA_DIR+"/cards.json",{cache:"no-store"})).json(); }
+    catch(e){ S.cards = null; }
     boot(meta, parseJsonl(snapT), parseJsonl(evT));
     return true;
   }catch(e){ return false; }
@@ -374,6 +392,18 @@ function drawGlyphs(){
   mx.clearRect(0,0,cM.width,cM.height);
   const [A,B,fr]=curSnaps();
   const C=S.cell;
+  S._focusXY=null;
+
+  // ---- E2: the focus's estate, outlined UNDER everything else --------------
+  // Read straight from the snapshot's `owners` at this tick, so what is outlined is what the
+  // world holds at exactly T — the same T the card and the caption are read at (E2-SYNC).
+  if(FOCUS!==null&&B.owners){
+    mx.save(); mx.strokeStyle="#ffcf5d"; mx.lineWidth=2; mx.setLineDash([5,4]);
+    mx.globalAlpha=0.85;
+    for(const [i,j,o] of B.owners){ if(o!==FOCUS) continue;
+      mx.strokeRect(cellCx(j)-C/2+1, cellCy(i)-C/2+1, C-2, C-2); }
+    mx.restore();
+  }
 
   // ---- β-3 deny: cumulative frustration heatmap (under everything) ----
   if(S.layer.deny && B.deny){
@@ -449,6 +479,15 @@ function drawGlyphs(){
       mx.globalAlpha=1;
       if(S.sel&&S.sel.kind==="pawn"&&S.sel.id===oid){
         mx.beginPath(); mx.arc(px,py,r+4,0,7); mx.strokeStyle=S_ACCENT; mx.lineWidth=2; mx.stroke();
+      }
+      // E2: the focus wears a double gold ring — the eye must never lose it in a 945-pawn crowd
+      if(FOCUS!==null&&oid===FOCUS){
+        mx.save();
+        mx.beginPath(); mx.arc(px,py,r+6,0,7); mx.strokeStyle="var(--gold)";
+        mx.strokeStyle="#ffcf5d"; mx.lineWidth=2.5; mx.stroke();
+        mx.beginPath(); mx.arc(px,py,r+10,0,7); mx.globalAlpha=0.45; mx.lineWidth=1.5; mx.stroke();
+        mx.restore();
+        S._focusXY=[px,py];
       }
       p._px=px; p._py=py; p._r=r; // cache for hit-testing
     }
@@ -641,6 +680,35 @@ function drawFlashes(){
   }
 }
 
+// ---- E2: the focus panel, re-read at EVERY tick ------------------------- //
+// Everything here is read at the CURRENT tick from the CURRENT snapshot — never cached from
+// another T. That is the whole discipline of the slice: map, card and caption must reduce to
+// one tick or the game is lying about what is happening (gate E2-SYNC).
+let _focusInit=false;
+function updateFocus(){
+  if(FOCUS===null) return;
+  const sec=$("focusSec"); if(!sec) return;
+  sec.style.display="";
+  const B=S.snaps[S.idx];
+  const cells=(B.owners||[]).filter(o=>o[2]===FOCUS);
+  const here=(B.pawns||[]).find(p=>p[0]===FOCUS);
+  $("fCells").textContent=cells.length
+    ? cells.length+" — "+cells.map(o=>"("+o[0]+","+o[1]+")").join(" ")
+    : "нет";
+  $("fAlive").textContent=here?("да, в ("+here[1]+","+here[2]+"), тело "+here[3].toFixed(3)):"нет";
+  if(_focusInit) return;                       // static parts: paint once
+  _focusInit=true;
+  $("fOid").textContent="#"+FOCUS;
+  const e=S.cards&&S.cards.entries&&S.cards.entries[String(FOCUS)];
+  if(!e){ $("fArc").textContent="карточка не приложена"; return; }
+  $("fArc").textContent=e.arc;
+  // the D4 honesty rule travels with the label: the numbers that produced it, right under it
+  $("fWhy").innerHTML=(e.arc_evidence||[]).map(r=>
+    '<span style="border:1px solid #333a;border-radius:9px;padding:1px 6px;white-space:nowrap">'
+    + String(r[0]) + ": <b>" + String(r[1]) + "</b></span>").join("");
+  $("fNarr").textContent=e.narrative||"";
+}
+
 // ============================ side panel ============================
 function drawSpark(cv, series, color, opts={}){
   const ctx=cv.getContext("2d"), W=cv.width, H=cv.height;
@@ -682,6 +750,7 @@ function updatePanel(){
       extort:S.snaps.map(s=>Math.abs(dmAt(s.t,"extort"))),
       marks:S.snaps.map(s=>s.marks?s.marks.length:0)};
   }
+  updateFocus();
   if(S.layer.metrics){
     drawSpark($("spPop"),_sparkCache.pop,S_ACCENT);
     drawSpark($("spGini"),_sparkCache.gini,S_GOLD,{lo:0,hi:1});

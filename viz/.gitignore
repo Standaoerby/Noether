@@ -2,3 +2,7 @@
 runs/
 glass/data/
 glass/presets/
+# E2 pawn slice — 10.4 MB, deterministic (gate E2-DET pins its package SHA). Rebuild:
+#   py stage3/viz_export.py --slice 58,42 --intent reflex --extort --delegate
+#       --tooth reputation --extort-enforcers 3 --delegate-enforcers 2
+slice/data/
