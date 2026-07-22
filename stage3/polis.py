@@ -298,6 +298,15 @@ class PolisConfig:
     # (gate MK-K3-UNTOUCHED). Needs the _house lineage (reuses the K2/mod-H machine). Pure
     # ledger — reassigns _cell_owner only, zero mass ops (gate MK-MASS < 1e-12). See §2.
     inherit_on: bool = False
+    # faithful ledger (WO_faithful-ledger): make the EventLog a MIRROR of the Polis. Ownership,
+    # inheritance and branding mutate state while emitting nothing, so any log consumer (card,
+    # narrative, LLM agent, external audit) is blind to who owned what and how it passed on.
+    # The observer below reconstructs it from a per-tick diff of PUBLIC state — canon untouched.
+    # Emission is fingerprint-neutral (proved in Ф0: the log is in no fingerprint, and the only
+    # state-affecting log reader, _update_houses, filters by kind), but it DOES change
+    # events.jsonl — which β-3 anchors (V3-S7, 2735d669…). Hence a flag, default OFF: every
+    # existing anchor stays byte-identical and the mirror is opt-in.
+    faithful_ledger: bool = False
     heir_fallback: str = "revert"        # revert (heirless cell -> commons, == canon) |
                                          # escheat (heirless cell consolidates to the NEAREST
                                          # living owner of any house — mod-25 semantics)
@@ -444,6 +453,12 @@ class Polis(AppropriationWorld):
         self._frailty = FrailtyField(
             cfg.frailty, n0=cfg.frailty_n0, k=cfg.frailty_k, x0=cfg.frailty_x0,
             rho_rep=cfg.frailty_rho_rep, seed=cfg.seed)
+        # faithful ledger: opt-in mirror of ownership/inheritance/branding into the EventLog.
+        # `_pending_inherit` is filled by _inherit_dead (the FACT of a succession, not a guess
+        # reconstructed from a diff — a diff cannot tell "inherited by kin" from "reverted then
+        # re-claimed by kin"), and drained by _emit_ledger_events at the end of the tick.
+        self._ledger_on = bool(getattr(cfg, "faithful_ledger", False))
+        self._pending_inherit = []
         # mod K: count of cells passed to a living bloodline heir (or escheat-consolidated)
         # this run — the MK-INHERIT-FIRES observable. Pure scalar, never fingerprinted; stays
         # 0 when inherit_off (MK-OFF untouched). Mirrors _delegate_defections/_extorted_total.
@@ -530,6 +545,11 @@ class Polis(AppropriationWorld):
         # mod H (DEBT): snapshot bodies so income THIS tick = the gain across the canonical
         # step (grazing + appropriation − metabolism). No-op unless debt_on.
         _debt_body0 = ({a.oid: a.body for a in self.pop} if self._debt.on else None)
+        # faithful ledger: snapshot the ownership/branding state ON ENTRY, so the post-step
+        # diff sees exactly what this tick changed. No-op (None) unless the mirror is on.
+        _ledger0 = self._ledger_snapshot() if self._ledger_on else None
+        if self._ledger_on:
+            self._pending_inherit = []         # refilled by _inherit_dead inside super().step()
         super().step()                         # full tower + appropriation, unchanged
         # mod J (frailty): age each pawn's redundancy blocks and cull the exhausted, RIGHT
         # after the canonical step and BEFORE _gc_mark_ledgers and every consumer — so a
@@ -579,6 +599,13 @@ class Polis(AppropriationWorld):
             self._step_voice_typed()           # C-LIVE: the mind is the teacher
         else:
             self._step_voice_modc()            # mod C: дао/ученик succession layer
+        # faithful ledger: emit claim/lose/inherit/mark/unmark from the tick's diff. MUST be
+        # LAST: _extort and _delegate brand pawns further down this method, so an earlier
+        # emission point saw the mark-ledgers unchanged and silently emitted nothing (caught
+        # in Ф1 — 79 extort marks, zero events). Ownership is settled inside super().step()
+        # and untouched below, so the late point is correct for it too. Pure observation.
+        if self._ledger_on:
+            self._emit_ledger_events(_ledger0)
 
     # ---- mod G2 GC: dead-oid reclamation for the mark-ledgers (WO_mark-ledger-gc) ---- #
     def _gc_mark_ledgers(self):
@@ -648,6 +675,61 @@ class Polis(AppropriationWorld):
             keep |= set(co.values())                 # (2) dead owners whose estate is pending
         self._house = {o: r for o, r in h.items() if o in keep}
 
+    # ---- faithful ledger: state-derived emission (WO_faithful-ledger Ф1) ---------- #
+    def _ledger_snapshot(self):
+        """Ownership + branding as of NOW. Cheap dict/set copies; read-only."""
+        return (dict(self._cell_owner),
+                set(getattr(self, "_extort_marks", ()) or ()),
+                set(getattr(self, "_delegate_marks", ()) or ()))
+
+    def _emit_ledger_events(self, before):
+        """Mirror this tick's ownership/branding changes into the EventLog.
+
+        The journal was blind to the thing the colony is actually about: who owned what and
+        how it passed on (the E1-Ф0 finding — 30 owners, 55 cells, 7380 kg appropriated, zero
+        events). This observer reconstructs it from a diff of PUBLIC state, so canon stays
+        byte-identical and no fingerprint moves (Ф0 proved the log is in none of them).
+
+        Inheritance is NOT inferred from the diff: a diff cannot distinguish "kin inherited"
+        from "reverted to commons, then re-claimed by kin". `_inherit_dead` records the fact
+        as it happens and we drain it here — the log states what the mechanism did, not what
+        it looked like afterwards. Marks are diffed over the LIVING set only, so the dead-oid
+        GC never masquerades as an un-branding.
+
+        Emission order is fully sorted => the log is deterministic for a given scene."""
+        if before is None:
+            return
+        own0, ext0, del0 = before
+        own1 = self._cell_owner
+        t = self.t
+        # successions first: they explain owner changes the plain diff would call claims
+        inherited = {}
+        for cell, decedent, heir, mode, root in sorted(self._pending_inherit):
+            inherited[cell] = heir
+            self.log.emit(t, "inherit", "individual", where=cell, actor=heir,
+                          data={"from": int(decedent), "house": int(root), "mode": mode})
+        self._pending_inherit = []
+        # ownership diff: what is owned now vs on entry
+        for cell in sorted(set(own0) | set(own1)):
+            a, b = own0.get(cell), own1.get(cell)
+            if a == b:
+                continue
+            if b is None:                       # the estate fell back to the commons
+                self.log.emit(t, "lose", "individual", where=cell, actor=int(a))
+            elif inherited.get(cell) == b:
+                continue                        # already told as `inherit`
+            else:                               # seized: newly owned, or taken from another
+                self.log.emit(t, "claim", "individual", where=cell, actor=int(b),
+                              data=({"from": int(a)} if a is not None else {}))
+        # branding diff over the LIVING set (the GC's dead sweep is not an un-branding)
+        live = {x.oid for x in self.pop}
+        for tag, s0, s1 in (("extort", ext0, set(getattr(self, "_extort_marks", ()) or ())),
+                            ("delegate", del0, set(getattr(self, "_delegate_marks", ()) or ()))):
+            for oid in sorted((s1 - s0) & live):
+                self.log.emit(t, "mark", "individual", actor=int(oid), data={"ledger": tag})
+            for oid in sorted((s0 - s1) & live):
+                self.log.emit(t, "unmark", "individual", actor=int(oid), data={"ledger": tag})
+
     def _update_houses(self):
         """Fold this tick's births into self._house (oid -> founder root), mirroring
         sim_inheritance._update_houses exactly: a child inherits its parent's house root.
@@ -687,12 +769,18 @@ class Polis(AppropriationWorld):
             if heir is not None:                          # living bloodline kin inherits
                 self._cell_owner[cell] = heir
                 self._inherit_events += 1                 # a real succession (MK-INHERIT-FIRES)
+                if self._ledger_on:                       # faithful ledger: record the FACT of
+                    self._pending_inherit.append(         # succession, not a guess from a diff
+                        (cell, owner, heir, "blood", self.house(owner)))
             elif self.cfg.heir_fallback == "escheat" and living_owned:
                 best = min(living_owned,                  # nearest living-owned cell consolidates
                            key=lambda co: (abs(co[0][0] - cell[0]) + abs(co[0][1] - cell[1]),
                                            co[1], co[0]))
                 self._cell_owner[cell] = best[1]
                 self._inherit_events += 1                 # escheat consolidation counts as firing
+                if self._ledger_on:                       # escheat is NOT blood — label it so
+                    self._pending_inherit.append(
+                        (cell, owner, best[1], "escheat", self.house(owner)))
             else:                                         # extinct line -> commons (baseline)
                 del self._cell_owner[cell]
 
