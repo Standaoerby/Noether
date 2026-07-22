@@ -35,12 +35,19 @@ same mirroring machinery. It must reproduce the baseline byte-for-byte. Without 
 result could be my hook perturbing the world rather than the mover being biased.
 
 DIAGNOSIS WHEN RED (the WO requires naming WHICH, not just "broken"):
-  (1) directional shift — positions диverge while the per-tick RNG draw COUNT still matches;
+  (1) directional shift — positions diverge while the per-tick RNG draw COUNT still matches;
   (2) RNG drawn in spatial scan order — the draw count itself diverges, i.e. the tie-break
       consumes randomness by walking the grid rather than by oid.
 
+STANDALONE BY DESIGN. This is a CHARACTERISER, not a pass-module: it is deliberately NOT
+registered in `verify_all`. It is red today and will stay red until the substrate is fixed
+under its own canon-touching WO — a characteriser that fails the build would push people to
+silence it, which is the one outcome that would lose the finding. After the fix it becomes an
+anti-regression: green will then be a certificate, not a hope.
+
 Run:  py stage3/run_mover_symmetry.py            # quick probe: 1 seed, R_j
       py stage3/run_mover_symmetry.py --full     # 8 seeds, R_j and R_ij
+Exit: 0 if equivariant, 1 if not (the gate's verdict, not a build failure).
 """
 from __future__ import annotations
 
