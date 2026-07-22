@@ -30,7 +30,31 @@ from stage3.viz_export import build_showcase_cfg                    # noqa: E402
 
 HDR = "=" * 78
 DAYS = 250
-LEDGER_KINDS = ("claim", "lose", "inherit", "mark", "unmark")
+LEDGER_KINDS = ("claim", "lose", "inherit", "mark", "unmark", "appropriate")
+TOL = 1e-9
+
+
+def _fl_mass(w):
+    """FL-MASS, both halves (WO §3 as refined for variant A):
+      (a) per-cell internal balance — Σ paid == Σ got == dm in every `appropriate` event;
+      (b) the log does not lie about the flow — Σ dm over the log == Δ `_appropriated_total`.
+    `appropriate` is a DERIVED deme event, so `dm` reports the magnitude moved in that cell;
+    the direction is read from payers/receivers."""
+    gross = 0.0
+    bad_cells = []
+    n = 0
+    for e in w.log.events:
+        if e.kind != "appropriate":
+            continue
+        n += 1
+        paid = sum(v for _o, v in e.data["payers"])
+        got = sum(v for _o, v in e.data["receivers"])
+        gross += e.dm
+        if abs(paid - got) > TOL or abs(paid - e.dm) > TOL:
+            bad_cells.append((e.t, e.where, paid, got, e.dm))
+    total = float(getattr(w, "_appropriated_total", 0.0))
+    return {"n_events": n, "gross": gross, "canon_total": total,
+            "delta": abs(gross - total), "bad_cells": bad_cells}
 
 
 def scene(days=DAYS, ledger=False, inherit=False, frailty="off", marks=False):
@@ -129,6 +153,13 @@ def main():
         else:
             print(f"  FL-PROPERTY-FAITHFUL ✗ расхождений на {len(mism)} тиках; первые: {mism[:3]}")
         print(f"  FL-MARK-FAITHFUL {'✓ реплей клейм == живые клейма на всех тиках' if marks_ok else f'✗ расхождений {len(mmis)}: {mmis[:3]}'}")
+        m = _fl_mass(w_on)
+        mass_ok = (not m["bad_cells"]) and m["delta"] < 1e-6
+        ok = ok and mass_ok
+        print(f"  FL-MASS  (а) баланс по клетке Σpaid==Σgot==dm: "
+              f"{'✓ во всех ' + str(m['n_events']) + ' событиях' if not m['bad_cells'] else '✗ ' + str(len(m['bad_cells'])) + ' битых: ' + str(m['bad_cells'][:2])}")
+        print(f"           (б) Σ dm по логу = {m['gross']:.6f} · канон _appropriated_total = "
+              f"{m['canon_total']:.6f} · Δ = {m['delta']:.2e} {'✓' if m['delta'] < 1e-6 else '✗'}")
 
     print(f"\n{HDR}")
     print(f"Ф1: {'✓ журнал стал зеркалом владения — и мир не сдвинулся' if ok else '✗ СТОП'}")

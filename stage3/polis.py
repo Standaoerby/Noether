@@ -919,17 +919,39 @@ class Polis(AppropriationWorld):
         each owner's tribute income THIS tick. The canon call runs FIRST inside
         AppropriationWorld.step (after all eating/movement), so the body delta across it is
         PURELY tribute (owners gain, non-owners lose); snapshotting is read-only, so the world
-        after is byte-identical to canon and delegate_off delegates straight to super()."""
-        if not self._delegate_on:
+        after is byte-identical to canon and delegate_off delegates straight to super().
+
+        faithful ledger (Ф2): the SAME body-delta snapshot also mirrors the appropriation flow
+        into the log. Canon publishes only the `_appropriated_total` scalar, so the journal
+        could say how much was taken overall and never who lost it or who gained it. The event
+        is `scale="deme"` because the mechanism POOLS the take per cell and splits it among
+        that cell's owners (the last absorbs the remainder) — a 1:1 "who -> whom" does not
+        exist in the rule, the cell is its natural unit. `dm` carries the MAGNITUDE moved in
+        that cell; the sign lives in payers/receivers, since one scalar cannot be negative for
+        the payers and positive for the receivers at once. As a DERIVED deme event its `dm` is
+        a reporting quantity, not a conservation delta — conservation is the canon mechanism's,
+        and that is untouched."""
+        if not (self._delegate_on or self._ledger_on):
             return super()._appropriate()
         before = {a.oid: a.body for a in self.pop}
+        pos = {a.oid: (a.i, a.j) for a in self.pop} if self._ledger_on else None
         super()._appropriate()
-        inc = {}
+        inc, percell = {}, {}
         for a in self.pop:
             d = a.body - before.get(a.oid, a.body)
             if d > 1e-15:                          # only owners gain in _appropriate
                 inc[a.oid] = d
-        self._delegate_m_income = inc
+            if self._ledger_on and abs(d) > 1e-12:
+                payers, receivers = percell.setdefault(pos[a.oid], ([], []))
+                (payers if d < 0 else receivers).append((int(a.oid), abs(d)))
+        if self._delegate_on:                      # unchanged mod-G2 behaviour
+            self._delegate_m_income = inc
+        for cell in sorted(percell):
+            payers, receivers = percell[cell]
+            self.log.emit(self.t, "appropriate", "deme", where=cell,
+                          dm=sum(v for _o, v in payers),
+                          data={"payers": [[o, v] for o, v in sorted(payers)],
+                                "receivers": [[o, v] for o, v in sorted(receivers)]})
 
     def _delegate_remit(self, B, tooth, guard_cells):
         """Does delegate B remit to the root this tick? The REVOKE tooth decides:
