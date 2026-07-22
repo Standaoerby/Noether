@@ -37,11 +37,14 @@ from sim_eventlog import EventLog                                       # noqa: 
 from stage3.polis import Polis, polis_fingerprint                       # noqa: E402
 from stage3.viz_export import run_capture                               # noqa: E402
 from stage3.pawn_card import (pawn_card, card_sha, replay_owners,       # noqa: E402
-                              extort_share, power_flow)
+                              extort_share, power_flow, arc_inputs,
+                              arc_from, arc_evidence, _arc_of,
+                              ARC_INPUTS, _dig)
 from stage3.export_pawn_card import e1_scene                            # noqa: E402
 
 HDR = "=" * 78
-FOCAL = 58          # the hero (WO §7.2): founder, 320 ticks a landholder, 105 extortions
+FOCAL = 58          # the flagship: founder, 320 ticks a landholder, 174 seizures — and net NEGATIVE
+CONTRAST = 42       # the contrast: preyed on 387 times, and the scene's actual sovereign (+190 kg)
 CHECKPOINTS = (50, 150, 300, 400)
 
 
@@ -277,6 +280,32 @@ def main():
 
     power_ok = share_ok and bal_ok and rep_ok and probe_clean
 
+    # ---- E1-ARC-BACKED: the label must be arithmetic, not assertion -------- #
+    print("\nE1-ARC-BACKED — ярлык дуги подкреплён показанными числами (гейт честности D4):")
+    arc_ok = True
+    for oid in (FOCAL, CONTRAST):
+        c = pawn_card(w_read.log, snaps, oid)
+        inp, ev = arc_inputs(c), arc_evidence(c)
+        label = _arc_of(c)
+        # (1) the label is a pure function of the evidence — recompute it from that alone
+        pure = arc_from(inp) == label
+        # (2) every evidence value is a VERBATIM field of the card, none invented for the
+        #     caption — re-dig each one by its declared path and compare
+        verbatim = all(val == _dig(c, path)
+                       for (_lab, val), (_lab2, path) in zip(ev, ARC_INPUTS))
+        # (3) the discriminating number is LOAD-BEARING: flip it and the label must flip.
+        #     A caption that survives its own numbers changing is decoration, not evidence.
+        flipped = dict(inp)
+        flipped["net"] = -abs(inp["net"]) - 1.0 if inp["net"] >= 0 else abs(inp["net"]) + 1.0
+        moved = arc_from(flipped) != label
+        arc_ok = arc_ok and pure and verbatim and moved
+        print(f"    #{oid} «{label}»")
+        print(f"        выводим из показанных чисел: {'✓' if pure else '✗'}; "
+              f"все значения — поля карточки: {'✓' if verbatim else '✗'}")
+        print(f"        нетто={inp['net']} несущее (перевернув знак -> «{arc_from(flipped)}»): "
+              f"{'✓' if moved else '✗ ЯРЛЫК НЕ ЗАВИСИТ ОТ ЧИСЛА'}")
+        print(f"        подкреплён: " + "; ".join(f"{k}={v}" for k, v in ev))
+
     # ---- E1-DET ----------------------------------------------------------- #
     w_b, snaps_b = run_capture(_scene(), every=1)
     card_b = pawn_card(w_b.log, snaps_b, FOCAL)
@@ -313,15 +342,17 @@ def main():
           f"{co['paid_and_took_same_tick_cell']}× из {co['of_n_paid']}; "
           f"жертва == рантье {co['victim_was_the_landlord']}×")
 
-    ok = voff and faithful and faithful_own and power_ok and det
+    ok = voff and faithful and faithful_own and power_ok and arc_ok and det
     print(f"\n  E1-VOFF {'✓' if voff else '✗'} · E1-FAITHFUL {'✓' if faithful else '✗'} · "
           f"E1-FAITHFUL-OWN {'✓' if faithful_own else '✗'} · PF-SHARE/BALANCE/REP "
-          f"{'✓' if power_ok else '✗'} · E1-DET {'✓' if det else '✗'}")
+          f"{'✓' if power_ok else '✗'} · E1-ARC-BACKED {'✓' if arc_ok else '✗'} · "
+          f"E1-DET {'✓' if det else '✗'}")
     print(HDR)
     assert voff, "E1-VOFF: the reader moved the world"
     assert faithful, "E1-FAITHFUL: the log does not reproduce the live population"
     assert faithful_own, "E1-FAITHFUL-OWN: the ledger is not a mirror of ownership"
     assert power_ok, "PF-SHARE/PF-BALANCE/REP-FAITHFUL: the flow attribution does not hold"
+    assert arc_ok, "E1-ARC-BACKED: the arc label is not backed by shown, load-bearing numbers"
     assert det, "E1-DET: the card is not deterministic"
     assert ok
     return 0

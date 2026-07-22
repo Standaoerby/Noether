@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Code"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stage3.pawn_card import (pawn_card, narrate_card, _arc_of, _dumps,   # noqa: E402
-                              CARD_VERSION)
+                              arc_evidence, CARD_VERSION)
 from stage3.viz_export import build_showcase_cfg, run_capture             # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "viz"))
@@ -72,6 +72,9 @@ def build_package(oids, seed=7, days=400, every=1):
         entries[str(oid)] = {
             "card": card,
             "arc": _arc_of(card),
+            # D4 honesty gate: the label ships together with the numbers that produced it, so
+            # a reader never has to take "рантье под данью" on trust (виток-2 Ф3)
+            "arc_evidence": arc_evidence(card),
             "narrative": narrate_card(card),
         }
     pkg = {

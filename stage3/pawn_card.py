@@ -46,7 +46,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stage3.viz_export import _Houses                      # noqa: E402  (lineage from the log)
 
-CARD_VERSION = 1
+# 1 — виток 1: chronicle · house · relationships · property(snapshots); `deferred` named the
+#     two projections that did not exist yet; `relationships.totals` carried `mass_extorted`
+#     and `mass_lost_to_extort` (GROSS event totals presented as personal figures).
+# 2 — виток 2: property moved to the log and grew `source`/`acts`/`n_acts`; `reputation` and
+#     `power` added and `deferred` emptied; the two mass fields renamed to `*_gross` with the
+#     personal figure in `power.totals.extort_attributed`.
+# The shapes are NOT interchangeable, so the version has to move — a version that stays put
+# across an incompatible change is a dead field: a consumer could not tell the two apart, and
+# would read a виток-1 card's `mass_extorted` as if it meant what виток 2 means by it.
+CARD_VERSION = 2
 
 # oid-bearing `data` fields (Ф0 forensics; verbatim key names, never renamed)
 OID_SCALAR = ("heard_by", "maker", "root")
@@ -564,39 +573,75 @@ def _pl(n, one, few, many):
     return f"{n} {many}"
 
 
-def _arc_of(card):
-    """Classify the life into an arc from the projections alone.
+# The arc is the one place where the card stops reporting and starts NAMING, so it is the one
+# place a wrong figure becomes a wrong claim. Виток 1 proved it: it read "extorted often, never
+# extorted from" as ВЛАСТЬ — a judgement resting on event COUNTS, which know neither that an
+# extortion is a pool shared with co-takers nor that the same pawn may be paying rent all the
+# while. The showcase hero is exactly that: 174 seizures, none against it, and a NEGATIVE net
+# across every power flow. The contrast pawn is the mirror — preyed on 387 times and therefore
+# labelled ЖЕРТВА, while netting +190 kg as the colony's actual rentier. Both labels pointed at
+# the wrong figure. So the classifier now (a) takes ONE explicit input dict, (b) is a pure
+# function of it, and (c) that same dict is what the card renders under the label. A label the
+# card does not show the arithmetic for cannot be produced — gate E1-ARC-BACKED enforces it.
 
-    Виток 2 refines the top of the ladder. Виток 1 read "extorted often, never extorted from"
-    as ВЛАСТЬ — but that stands on event COUNTS, and counts do not know that an extortion is
-    a pool shared with co-takers, nor that the same pawn may be paying rent all the while. The
-    showcase hero is exactly that case: 174 seizures, 0 seizures against it, and a NEGATIVE
-    net across every power flow (−2.07 kg: it clawed back less by force than it paid in rent,
-    and its own land yielded nothing). Calling that власть is the same over-attribution the
-    gross mass figure made, one level up. So the net decides between force that PAYS and force
-    that merely SURVIVES."""
-    pr, re_, ch = card["property"], card["relationships"], card["chronicle"]
-    P = card["power"]
-    t = re_["totals"]
+# label -> (dotted path into the card) for every quantity the classifier may read
+ARC_INPUTS = (
+    ("изъятий с её участием", "relationships.totals.n_extorted"),
+    ("изъятий против неё", "relationships.totals.n_extorted_by"),
+    ("нетто по властным потокам, кг", "power.totals.net"),
+    ("рента получена, кг", "power.totals.rent_received"),
+    ("рента уплачена, кг", "power.totals.rent_paid"),
+    ("тиков с землёй", "property.ticks_holding"),
+)
+
+
+def _dig(card, path):
+    cur = card
+    for p in path.split("."):
+        cur = cur[p]
+    return cur
+
+
+def arc_inputs(card):
+    """Every quantity the arc classifier is allowed to read, as one dict. `lost_land_alive` is
+    the only derived one and is derived HERE, not inside the classifier, so the rendered
+    evidence and the decision cannot drift apart."""
+    ch, pr = card["chronicle"], card["property"]
     death_t = (ch["death"] or {}).get("t")
     ten = pr["tenures"]
-    lost_alive = bool(ten and death_t is not None and ten[-1]["to_t"] < death_t - 1)
-    net = P["totals"]["net"]
-    if t["n_extorted"] and not t["n_extorted_by"]:
-        if lost_alive:
+    inp = {path.rsplit(".", 1)[-1]: _dig(card, path) for _lab, path in ARC_INPUTS}
+    inp["lost_land_alive"] = bool(ten and death_t is not None
+                                  and ten[-1]["to_t"] < death_t - 1)
+    return inp
+
+
+def arc_from(inp):
+    """Pure classifier over `arc_inputs` — it has no other source of truth."""
+    if inp["n_extorted"] and not inp["n_extorted_by"]:
+        if inp["lost_land_alive"]:
             return "падение с высоты"
-        return "власть" if net > 0 else "сила без прибытка"
-    if t["n_extorted_by"] and t["n_extorted_by"] > t["n_extorted"]:
-        # The SAME defect one level up. "Extorted from more often than it extorts" is a
-        # count, and the contrast pawn of the showcase is preyed on 387 times — because it
-        # is the landlord everyone squats on. It still nets +190 kg, outlives the run and
-        # leaves 178 heirs. Calling that a victim is the gross-mass error wearing a label.
-        return "жертва" if net < 0 else "рантье под данью"
-    if lost_alive:
+        return "власть" if inp["net"] > 0 else "сила без прибытка"
+    if inp["n_extorted_by"] and inp["n_extorted_by"] > inp["n_extorted"]:
+        return "жертва" if inp["net"] < 0 else "рантье под данью"
+    if inp["lost_land_alive"]:
         return "падение"
-    if pr["ticks_holding"]:
+    if inp["ticks_holding"]:
         return "владение"
     return "тихая жизнь"
+
+
+def arc_evidence(card):
+    """The numbers that produced the label, ready to render underneath it. Values are read
+    from the card by path, so the caption can never carry a figure the card does not hold."""
+    rows = [[lab, _dig(card, path)] for lab, path in ARC_INPUTS]
+    if arc_inputs(card)["lost_land_alive"]:
+        rows.append(["потеряла последнюю клетку при жизни", "да"])
+    return rows
+
+
+def _arc_of(card):
+    """Classify the life into an arc — from `arc_inputs` and nothing else."""
+    return arc_from(arc_inputs(card))
 
 
 def narrate_card(card, title=None):

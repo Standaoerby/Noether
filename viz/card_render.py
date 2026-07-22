@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import html
 
-CARD_VERSION = 1
+# NO CARD_VERSION constant here on purpose. This module used to keep its own copy, which is the
+# same dead-field trap the version bump exists to close: a renderer printing its OWN version
+# would stamp "v2" on a виток-1 card and defeat the point of versioning at all. The footer
+# reads `card["card_version"]` — the version of the card actually being rendered.
 
 
 _CSS = """
@@ -36,6 +39,12 @@ dt{color:var(--dim);font:400 .85rem/1.5 system-ui,sans-serif}
 dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
 .spark{width:100%;height:44px;display:block;margin-top:.6rem}
 .wide{margin-top:1rem}
+.why{margin:-.7rem 0 1.3rem;display:flex;flex-wrap:wrap;gap:.35rem;align-items:baseline}
+.whyhead{font:600 .66rem/1 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;
+color:var(--dim);margin-right:.3rem}
+.chip{font:.76rem/1.5 system-ui,sans-serif;color:var(--dim);background:var(--panel);
+border:1px solid var(--line);border-radius:1rem;padding:.1rem .6rem}
+.chip b{color:var(--ink);font-variant-numeric:tabular-nums}
 .note{margin:0 0 .8rem;color:var(--dim);font:.8rem/1.55 system-ui,sans-serif}
 dt.sub{padding-left:1.1rem;font-style:italic}
 dt.emph{color:var(--ink);font-weight:600}
@@ -89,6 +98,9 @@ def render_html(entry, scene):
     body = f"""<div class="wrap">
 <h1>Пешка #{oid}</h1>
 <div class="arc">{html.escape(arc)}</div>
+<div class="why"><span class="whyhead">чем подкреплён ярлык</span>{"".join(
+    f'<span class="chip">{html.escape(str(k))}: <b>{html.escape(str(v))}</b></span>'
+    for k, v in entry["arc_evidence"])}</div>
 <div class="narr">{narr_html}</div>
 <div class="grid">
   <div class="panel"><h2>Хроника</h2>{_dl([
@@ -145,7 +157,7 @@ def render_html(entry, scene):
       ("ИТОГО по властным потокам", f"{PT['net']:+} кг", "emph"),
   ])}</div>
 <footer>Noether · E1 карточка пешки · сцена seed {scene['seed']}, {scene['days']} дней,
-G2-ON + intent=reflex · карточка v{CARD_VERSION} · <code>sha {card['sha']}</code><br>
+G2-ON + intent=reflex · карточка v{card['card_version']} · <code>sha {card['sha']}</code><br>
 Проекции поверх единого EventLog; читатель мира не менял (E1-VOFF).</footer>
 </div>"""
     return (f"<!doctype html><html lang=ru><head><meta charset=utf-8>"
