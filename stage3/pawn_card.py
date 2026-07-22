@@ -260,6 +260,143 @@ def _dumps(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
 
 
+# --------------------------------------------------------------------------- #
+#  Narrative (Ф2) — prose over the projections, not a table of them            #
+# --------------------------------------------------------------------------- #
+# The canon `log.narrate` renders one line per event (a chronicle of records). E1 asks for
+# the other thing: a connected personal history, the lab->world bridge («потеряла дом ->
+# должник дома X -> предала делегировавшего»). So this narrator does not re-emit rows — it
+# reads the four projections, classifies the life ARC, and composes conditionally, which is
+# what makes it a narrator rather than a template fitted to one pawn.
+
+def _pl(n, one, few, many):
+    """Russian plural agreement — the card is prose for the book, not a debug dump."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def _arc_of(card):
+    """Classify the life into an arc from the projections alone."""
+    pr, re_, ch = card["property"], card["relationships"], card["chronicle"]
+    t = re_["totals"]
+    death_t = (ch["death"] or {}).get("t")
+    ten = pr["tenures"]
+    lost_alive = bool(ten and death_t is not None and ten[-1]["to_t"] < death_t - 1)
+    if t["n_extorted"] and not t["n_extorted_by"]:
+        return "власть" if not lost_alive else "падение с высоты"
+    if t["n_extorted_by"] and t["n_extorted_by"] > t["n_extorted"]:
+        return "жертва"
+    if lost_alive:
+        return "падение"
+    if pr["ticks_holding"]:
+        return "владение"
+    return "тихая жизнь"
+
+
+def narrate_card(card, title=None):
+    """The card as prose. Deterministic (pure function of the card), LLM-ready."""
+    ch, ho, re_, pr = card["chronicle"], card["house"], card["relationships"], card["property"]
+    oid, t = card["oid"], re_["totals"]
+    org, dth, life = ch["origin"], ch["death"], ch["lifespan"]
+    arc = _arc_of(card)
+    L = [f"[пешка #{oid} — {arc}]"]
+
+    # I. происхождение
+    if org:
+        where = f" в клетке {tuple(org['where'])}" if org.get("where") else ""
+        g = org.get("gene")
+        gtxt = f", ген {g - 273.15:.1f}°C" if isinstance(g, (int, float)) else ""
+        if org["kind"] == "seed":
+            L.append(f"Основатель: появилась на день {org['t']}{where} из первого посева{gtxt} — "
+                     f"у неё нет родителя, её дом начинается с неё самой.")
+        else:
+            L.append(f"Родилась на день {org['t']}{where}, ребёнок #{org['parent']}{gtxt}; "
+                     f"поколение {ho['generation_depth']} в доме {ho['house_root']}.")
+    if life:
+        L.append(f"Прожила {_pl(life['ticks'],'тик','тика','тиков')} (дни {life['born_t']}–{life['end_t']}), "
+                 f"совершив {_pl(ch['n_acts'],'действие','действия','действий')}.")
+
+    # II. земля
+    if pr["n_tenures"] == 0:
+        L.append("Земли не держала никогда — всю жизнь на чужой или общей.")
+    else:
+        first = pr["tenures"][0]
+        last = pr["tenures"][-1]
+        L.append(f"Землю взяла на день {first['from_t']} и держала её {_pl(pr['ticks_holding'],'тик','тика','тиков')} "
+                 f"(пик — {_pl(pr['peak_cells'],'клетка','клетки','клеток')}).")
+        if pr["final_cells"]:
+            L.append("Землю не отдала никому: она была её и в последний день.")
+        elif dth and last["to_t"] >= dth["t"] - 1:
+            L.append("Держала до самого конца — землю отняла только смерть.")
+        else:
+            L.append(f"Но на день {last['to_t']} потеряла последнюю клетку и доживала "
+                     f"{_pl((dth['t'] - last['to_t']) if dth else 0, 'тик', 'тика', 'тиков')} "
+                     f"безземельной.")
+
+    # III. власть и связи
+    if t["n_extorted"]:
+        L.append(f"Брала силой: {_pl(t['n_extorted'],'изъятие','изъятия','изъятий')} на {t['mass_extorted']} кг чужого тела.")
+    if t["n_extorted_by"]:
+        L.append(f"И сама была добычей: у неё отняли {_pl(t['n_extorted_by'],'раз','раза','раз')} "
+                 f"({t['mass_lost_to_extort']} кг).")
+    elif t["n_extorted"]:
+        L.append("При этом её саму не тронул никто — ни одного изъятия против неё.")
+    if t["mass_remitted"]:
+        L.append(f"Отчисляла наверх: {t['mass_remitted']} кг ушло корню делегирования.")
+    if re_["n_known"]:
+        voice = (f"заговорила {_pl(t['n_spoke'],'раз','раза','раз')}" if t["n_spoke"]
+                 else "не заговорила ни разу")
+        L.append(f"Знала {_pl(re_['n_known'],'другую пешку','других пешки','других пешек')}, "
+                     f"слышала {_pl(t['n_heard'],'чужую заявку','чужие заявки','чужих заявок')} — и {voice}.")
+
+    # IV. кровь
+    if ho["n_children"]:
+        kids = ", ".join(f"#{k}" for k in ho["children"][:5])
+        L.append(f"Оставила потомство: {_pl(ho['n_children'],'наследник','наследника','наследников')} ({kids}); "
+                 f"дом {ho['house_root']} насчитывает {_pl(ho['house_size'],'душу','души','душ')} за всю историю.")
+    else:
+        L.append(f"Потомства не оставила — дом {ho['house_root']} не продлился через неё.")
+
+    # V. конец
+    if dth:
+        cause = {"senescence": "от старости", "starvation": "от голода"}.get(dth["cause"], dth["cause"])
+        L.append(f"Умерла на день {dth['t']} {cause}, в возрасте {dth['age']}, "
+                 f"вернув {abs(dth['dm']):.4f} кг в почву.")
+    else:
+        L.append("К концу прогона была ещё жива.")
+
+    # тезис — дуга одной строкой (мост в мир)
+    L.append("")
+    L.append(f"Тезис: {_thesis(card, arc)}")
+    return "\n".join(L)
+
+
+def _thesis(card, arc):
+    """The arc compressed to one line — the bridge the WO asks for."""
+    ho, re_, pr, ch = card["house"], card["relationships"], card["property"], card["chronicle"]
+    t = re_["totals"]
+    bits = []
+    if ch["origin"] and ch["origin"]["kind"] == "seed":
+        bits.append("основатель")
+    if pr["ticks_holding"]:
+        bits.append(f"держала землю {_pl(pr['ticks_holding'],'тик','тика','тиков')}")
+    if t["n_extorted"] and not t["n_extorted_by"]:
+        bits.append(f"брала у других {_pl(t['n_extorted'],'раз','раза','раз')} и не отдала ничего")
+    elif t["n_extorted_by"]:
+        bits.append(f"отдала силой {t['mass_lost_to_extort']} кг")
+    if not t["n_spoke"] and t["n_heard"]:
+        bits.append("не сказав ни слова")
+    if ho["n_children"]:
+        bits.append(f"оставила {_pl(ho['n_children'],'наследника','наследников','наследников')} и дом, переживший её")
+    else:
+        bits.append("линия оборвалась на ней")
+    return "; ".join(bits) + "."
+
+
 def build(cfg=None, every=1, oid=None):
     """Convenience: run the E1 scene and return (log, snapshots, card). The scene is
     G2-ON + intent_policy='reflex' — WITHOUT the intent layer the extort seam is skipped and
