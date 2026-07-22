@@ -29,7 +29,7 @@ from dataclasses import asdict
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from schema import frames_from_jsonl, SnapFrame       # lazy canon import -> no Code/ here
 
@@ -177,6 +177,73 @@ def health():
 @app.get("/runs")
 def runs():
     return [_summary(name, REGISTRY[name]) for name in sorted(REGISTRY)]
+
+
+# --------------------------------------------------------------------------- #
+#  E1 — pawn cards. PRE-EXPORTED packages ONLY.                                #
+#                                                                              #
+#  Guardrail (WO E1 Ф3): these endpoints NEVER run a simulation to answer a     #
+#  request — they read runs/*.card.json written by stage3/export_pawn_card.py,  #
+#  exactly as the snapshot registry above reads *.snap.jsonl. Nothing here      #
+#  touches Code/ or Polis on the request path, so no B0-fp gate is needed:      #
+#  there is no world to move. The narrative is served VERBATIM as exported      #
+#  (it passed the Ф2 honesty gate) — the front does no editorialising.          #
+# --------------------------------------------------------------------------- #
+def _load_cards() -> dict:
+    out = {}
+    for path in sorted(glob.glob(os.path.join(RUNS_DIR, "*.card.json"))):
+        name = os.path.basename(path)[:-len(".card.json")]
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                out[name] = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return out
+
+
+CARDS = _load_cards()
+DEFAULT_CARD_PKG = "e1_pawn_cards"
+
+
+def _card_entry(oid: int, pkg: str = None):
+    """Resolve one pawn's card across packages (explicit ?pkg= wins, else the default)."""
+    if pkg:
+        names = [pkg]
+    else:
+        names = ([DEFAULT_CARD_PKG] if DEFAULT_CARD_PKG in CARDS else []) + \
+                [n for n in sorted(CARDS) if n != DEFAULT_CARD_PKG]
+    for name in names:
+        p = CARDS.get(name)
+        if p and str(oid) in p.get("entries", {}):
+            return name, p, p["entries"][str(oid)]
+    raise HTTPException(status_code=404,
+                        detail=f"no exported card for oid {oid} "
+                               f"(run: py stage3/export_pawn_card.py --oids {oid})")
+
+
+@app.get("/cards")
+def cards():
+    """Which card packages are on disk, and which pawns each carries."""
+    return [{"package": n, "oids": p.get("oids", []), "scene": p.get("scene", {}),
+             "card_version": p.get("card_version")} for n, p in sorted(CARDS.items())]
+
+
+@app.get("/pawn/{oid}")
+def pawn(oid: int, pkg: str = Query(None)):
+    """The card as JSON: four projections + the classified arc + the Ф2 narrative."""
+    name, package, entry = _card_entry(oid, pkg)
+    return {"package": name, "scene": package.get("scene", {}), "oid": oid,
+            "arc": entry["arc"], "narrative": entry["narrative"], "card": entry["card"]}
+
+
+@app.get("/pawn/{oid}/view", response_class=HTMLResponse)
+def pawn_view(oid: int, pkg: str = Query(None)):
+    """The rendered card — the SAME renderer that writes the standalone artifact, so the
+    in-app view and the shareable file cannot drift apart. `card_render` is canon-free (it
+    imports nothing from Code/ or stage3/), so this route keeps the server simulation-free."""
+    from card_render import render_html
+    name, package, entry = _card_entry(oid, pkg)
+    return HTMLResponse(render_html(entry, package.get("scene", {})))
 
 
 # --------------------------------------------------------------------------- #
