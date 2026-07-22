@@ -803,7 +803,14 @@ function updateFocus(){
   if(FOCUS===null) return;
   const sec=$("focusSec"); if(!sec) return;
   sec.style.display="";
-  const B=S.snaps[S.idx];
+  // THE SAME SNAPSHOT THE MAP DRAWS. `curSnaps()` returns (A, B, frac) where B is "the tick
+  // being entered" — snaps[idx+1] — and drawGlyphs/drawFocusFlows both render B. Reading
+  // snaps[idx] here put the panel ONE TICK BEHIND the map: the estate outline, the flow
+  // arrows and the caption belonged to different ticks. That is precisely the "the game lies
+  // about what is happening" failure E2-SYNC exists to prevent, and the package-level gate
+  // could not see it — it validates the DATA, never the front's choice of tick. Found by eye
+  // on the merged build; the assertion below makes it impossible to reintroduce silently.
+  const B=curSnaps()[1];
   const cells=(B.owners||[]).filter(o=>o[2]===FOCUS);
   const here=(B.pawns||[]).find(p=>p[0]===FOCUS);
   $("fCells").textContent=cells.length
@@ -815,6 +822,11 @@ function updateFocus(){
   // (pawn_card.event_captions) and shipped in the package, never composed here. A caption
   // written on the front would be a second source of truth sitting beside the map, free to
   // drift from it; gate E2-HONEST holds every line to an event at its own tick.
+  // one-tick guard: the panel and the film must name the same tick, or say so loudly
+  if(B.t !== displayTick()){
+    console.error("E2-SYNC(front): panel tick", B.t, "!= map tick", displayTick());
+    S._syncBroken = true;
+  } else { S._syncBroken = false; }
   const beats=$("fBeats");
   if(beats && S._caps){
     const now=S._caps.filter(c=>c.t===B.t);
