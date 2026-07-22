@@ -389,8 +389,12 @@ SLICE_KINDS = {
     "claim", "lose", "inherit",            # the ownership ledger — GLOBAL, replayed to a map
     "appropriate", "extort", "delegate_remit",   # the flows — GLOBAL, roles read per event
     "mark", "unmark",                      # branding — GLOBAL
-    "birth", "death",                      # the population line (reconstruct_live)
+    "seed", "birth", "death",              # the population line (reconstruct_live)
 }
+# `seed` is in IGNORED for the film — founders are drawn implicitly as the t=0 population — but
+# the slice needs it as an EVENT: a founder's story opens with "появилась из первого посева",
+# and gate E2-HONEST rightly refused that caption while no event at t=0 licensed it. Its
+# absence also made the population replay silently wrong for founders. 120 rows, nothing.
 
 
 def _slice_guard(out_dir):
@@ -505,13 +509,18 @@ def export(out_dir, seed=7, days=400, every=1, verbose=True, cfg=None, events_mo
         # import — pawn_card imports `_Houses` from this module, so a top-level import would
         # be circular. The card is the E1 artifact verbatim (same reader, same SHA), so slice
         # and card can never tell two different stories about the same pawn.
-        from stage3.pawn_card import pawn_card as _card, narrate_card, _arc_of, arc_evidence
+        from stage3.pawn_card import (pawn_card as _card, narrate_card, _arc_of,
+                                      arc_evidence, event_captions)
         cards = {}
         for oid in sorted(int(o) for o in slice_foci):
             c = _card(w.log, snapshots, oid)
+            # `captions` sits in the ENTRY, never inside `card`: the card is the E1 artifact
+            # and its SHA is a settled anchor (aa87881cc8b26a60 / c538e24f8f08817b). A caption
+            # layer added in E2 must not move an anchor accepted in E1.
             cards[str(oid)] = {"card": c, "arc": _arc_of(c),
                                "arc_evidence": arc_evidence(c),
-                               "narrative": narrate_card(c)}
+                               "narrative": narrate_card(c),
+                               "captions": event_captions(w.log, oid)}
         files["cards.json"] = (_dumps({"foci": sorted(int(o) for o in slice_foci),
                                        "entries": cards}) + "\n").encode("utf-8")
     files["snapshots.jsonl"] = ("".join(_dumps(s) + "\n" for s in snapshots)).encode("utf-8")

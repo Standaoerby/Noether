@@ -523,6 +523,155 @@ def power_flow(log, oid):
 
 
 # --------------------------------------------------------------------------- #
+#  7. Event captions — the moving narrative (E2 Ф3)                            #
+# --------------------------------------------------------------------------- #
+# The slice's caption layer is a PROJECTION OF THE SAME EVENTS the map draws, not a parallel
+# text. Written any other way it would be a second source of truth sitting next to the map,
+# and the caption could drift from the arrows exactly as the arrows could have drifted from
+# the ledger — so it is generated HERE, once, at export time, and both the in-app view and the
+# standalone artifact read the identical strings. Every caption carries `backing`: the event
+# kind and the numbers it stands on, so gate E2-HONEST can hold each line to an event at the
+# SAME tick. A caption with no event at its tick is a lie about what is happening.
+#
+# SELECTION RULE (stated, because a rule that silently drops beats is a rule that edits the
+# story). Structural events — birth/claim/lose/inherit/taken/mark/unmark/death — always
+# caption. Flows do not: rent falls 174 times on #58 and 387 on #42, which is a ledger.
+# Flows caption on
+#   * the first occurrence of that kind, and
+#   * a change of counterpart while the other end is SMALL (<=2 of them) — "now she pays a
+#     different master" is a beat, and
+#   * a DOUBLING of the counterpart count — the beat for a crowd.
+# The middle rule alone was tried first and is wrong for a rentier: #42's payer set changes
+# almost every tick as the colony grows, giving 398 captions — a ledger wearing prose. The
+# doubling rule turns that same growth into what it actually is, an estate whose tribute base
+# keeps doubling. `dropped` reports how many flow events were folded away, so the pruning can
+# never read as "this was everything".
+
+def _oids(ids, cap=4):
+    """Name a few and count the rest. A caption listing 131 oids inline is a wall, not a
+    sentence — but the tail is SAID, never silently dropped."""
+    ids = sorted(ids)
+    head = ", ".join(f"#{o}" for o in ids[:cap])
+    return head if len(ids) <= cap else f"{head} и ещё {len(ids) - cap}"
+
+
+def event_captions(log, oid, t_end=None):
+    """Per-tick captions for one pawn, derived from the journal alone."""
+    if t_end is None:
+        t_end = max((e.t for e in log.events), default=0)
+    out = []
+
+    def say(t, kind, text, **backing):
+        out.append({"t": t, "kind": kind, "text": text, "backing": backing})
+
+    owner = {}                      # global replay: needed to see cells taken FROM this pawn
+    beat, n_flow = {}, 0            # per-kind (ids, count) of the last captioned flow
+
+    def is_beat(kind, ids):
+        """First of its kind · a swap while the other end is small · or a doubling."""
+        prev = beat.get(kind)
+        ids = tuple(sorted(ids))
+        if prev is None:
+            beat[kind] = ids
+            return True
+        if len(ids) <= 2 and ids != prev:
+            beat[kind] = ids
+            return True
+        if len(ids) >= 2 * max(1, len(prev)):
+            beat[kind] = ids
+            return True
+        return False
+
+    for e in log.events:
+        d = e.data or {}
+        cell = tuple(e.where) if e.where else None
+        if e.kind in ("seed", "birth") and e.actor == oid:
+            if e.kind == "seed":
+                say(e.t, "seed", f"Появилась из первого посева в клетке {cell}.", where=list(cell or ()))
+            else:
+                say(e.t, "birth", f"Родилась в клетке {cell}, ребёнок #{e.parent}.",
+                    where=list(cell or ()), parent=e.parent)
+        elif e.kind in ("claim", "inherit"):
+            prev = owner.get(cell)
+            owner[cell] = e.actor
+            frm = d.get("from")
+            if e.actor == oid:
+                if frm is None:
+                    say(e.t, "claim", f"Взяла клетку {cell} — прежде ничья.", where=list(cell))
+                else:
+                    say(e.t, "claim", f"Взяла клетку {cell}, отняв её у #{frm}.",
+                        where=list(cell), frm=int(frm))
+            elif prev == oid:
+                say(e.t, "taken", f"#{e.actor} отнял у неё клетку {cell}.",
+                    where=list(cell), by=int(e.actor))
+        elif e.kind == "lose":
+            prev = owner.pop(cell, None)
+            if prev == oid:
+                say(e.t, "lose", f"Потеряла клетку {cell} — земля вернулась в общее.",
+                    where=list(cell))
+        elif e.kind == "appropriate":
+            rec = sorted(o for o, _v in d.get("receivers", ()))
+            pay = sorted(o for o, _v in d.get("payers", ()))
+            mine = [v for o, v in d.get("payers", ()) if o == oid]
+            if mine:
+                n_flow += 1
+            if mine and is_beat("rent_paid", rec):
+                who = _oids(rec) or "никому"
+                say(e.t, "rent_paid",
+                    f"С этого дня платит дань {who} за клетку {cell} — {_q(mine[0])} кг.",
+                    where=list(cell), to=rec, mass=_q(mine[0]))
+            got = [v for o, v in d.get("receivers", ()) if o == oid]
+            if got:
+                n_flow += 1
+            if got and is_beat("rent_got", pay):
+                say(e.t, "rent_got",
+                    f"Собирает дань со своей клетки {cell} — {_pl(len(pay),'плательщик','плательщика','плательщиков')}, "
+                    f"{_q(got[0])} кг.", where=list(cell), frm=pay, mass=_q(got[0]))
+        elif e.kind == "extort":
+            vs, ts = sorted(d.get("victims") or []), list(d.get("takers") or [])
+            total = float(e.dm if e.dm is not None else (d.get("amount") or 0.0))
+            if oid in ts:
+                n_flow += 1
+            if oid in ts and is_beat("extort_took", vs):
+                share = extort_share(total, ts, oid)
+                with_others = (f", деля добычу с {_pl(len(ts)-1,'подельником','подельниками','подельниками')}"
+                               if len(ts) > 1 else " в одиночку")
+                say(e.t, "extort_took",
+                    f"Отнимает силой у {_oids(vs)}{with_others} — "
+                    f"её доля {_q(share)} кг из {_q(total)} кг изъятых.",
+                    where=list(cell or ()), victims=vs, share=_q(share), gross=_q(total),
+                    n_takers=len(ts))
+            if oid in vs:
+                n_flow += 1
+            if oid in vs and is_beat("extort_lost", ts):
+                say(e.t, "extort_lost",
+                    f"У неё отнимают силой {_q(total)} кг — {_pl(len(ts),'вымогатель','вымогателя','вымогателей')}: "
+                    f"{_oids(ts)}.",
+                    where=list(cell or ()), takers=sorted(ts), gross=_q(total),
+                    resolvable=(len(vs) == 1))
+        elif e.kind in ("mark", "unmark") and e.actor == oid:
+            led = d.get("ledger")
+            what = {"extort": "как вымогатель", "delegate": "как отказчик от ремитты"}.get(led, str(led))
+            say(e.t, e.kind,
+                (f"Заклеймена {what}." if e.kind == "mark" else f"Клеймо {what} снято."),
+                ledger=led)
+        elif e.kind == "death" and e.actor == oid:
+            cause = {"senescence": "от старости", "starvation": "от голода"}.get(
+                d.get("cause", "starvation"), str(d.get("cause")))
+            say(e.t, "death",
+                f"Умерла {cause} в возрасте {d.get('age')}, вернув {abs(_q(e.dm))} кг в почву.",
+                age=d.get("age"), cause=d.get("cause"), dm=abs(_q(e.dm)))
+    n_cap_flow = sum(1 for c in out if c["kind"] in
+                     ("rent_paid", "rent_got", "extort_took", "extort_lost"))
+    return {"source": "log", "n": len(out), "t_end": t_end,
+            "rule": ("структурные события — всегда; потоки — первое в своём роде, смена "
+                     "контрагента при малом числе (<=2) и удвоение числа контрагентов"),
+            "flow_events": n_flow, "flow_captioned": n_cap_flow,
+            "flow_folded": n_flow - n_cap_flow,
+            "items": out}
+
+
+# --------------------------------------------------------------------------- #
 #  Assembler                                                                   #
 # --------------------------------------------------------------------------- #
 def pawn_card(log, snapshots, oid):

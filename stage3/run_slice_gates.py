@@ -1,4 +1,4 @@
-"""run_slice_gates.py — E2 Ф1 gates: E2-VOFF / E2-DET / E2-SYNC.
+"""run_slice_gates.py — E2 gates (Ф1-Ф3): E2-VOFF / E2-DET / E2-SYNC / E2-HONEST.
 
   E2-VOFF   the slice export is a READER: a run under it keeps state_fingerprint AND
             polis_fingerprint equal to a clean run's. Same glass pattern as V-OFF / E1-VOFF.
@@ -17,6 +17,13 @@
                   this scene only 3 involve a focus, so a focus-only ledger would keep 1.7%
                   of it. The gate proves the shipped package is not focus-filtered by
                   showing the replay reconstructs cells the focus never touched.
+
+  E2-HONEST (Ф3) no caption without an EVENT AT ITS OWN TICK. The caption layer is a
+            projection of the same events the map draws — generated once at export time and
+            shipped inside the package, never composed on the client — so a line can be held
+            to the event that licenses it. Also checks that every caption carries the numbers
+            it stands on, that the flow pruning is DECLARED rather than silent, and that the
+            E1 card anchors did not move (captions live in the entry, not inside `card`).
 
 These read the PACKAGE ON DISK, not an in-memory object — the artifact is what the front
 consumes, so the artifact is what gets gated. The ownership replay uses the SHIPPED
@@ -75,7 +82,7 @@ def _clean(cfg):
 
 def main():
     print(HDR)
-    print(f"E2 Ф1 — gates for the pawn slice (scene: E1 виток-2, foci={FOCI})")
+    print(f"E2 — gates for the pawn slice (scene: E1 виток-2, foci={FOCI})")
     print(HDR)
     cfg = e1_scene(seed=7, days=400)
 
@@ -143,7 +150,14 @@ def main():
     # (b) position: the focus is in the snapshot exactly while it is alive
     pos_ok = True
     for oid in FOCI:
-        born = next((e.t for e in ev if e.kind in ("birth", "seed") and e.actor == oid), 0)
+        # no silent fallback: a missing origin event must SHOW, not default to 0 — that
+        # default is what let a caption stand at t=0 with nothing in the package behind it
+        origin = [e.t for e in ev if e.kind in ("birth", "seed") and e.actor == oid]
+        if not origin:
+            pos_ok = False
+            print(f"    (b) позиция #{oid}: ✗ в пакете НЕТ события рождения/посева")
+            continue
+        born = origin[0]
         died = next((e.t for e in ev if e.kind == "death" and e.actor == oid), None)
         present = {s["t"] for s in snaps if any(p[0] == oid for p in s["pawns"])}
         expect = {s["t"] for s in snaps
@@ -166,14 +180,103 @@ def main():
           f"{n_focus_claims}; клеток вне фокуса {len(all_cells - focus_cells)}  "
           f"{'✓ не focus-only' if glob_ok else '✗ РЕЕСТР УРЕЗАН ДО ФОКУСА'}")
 
-    sync = own_ok and ship_ok and pos_ok and glob_ok
-    ok = voff and det and sync
+    # (d) FLOWS: the card's power rows and the package's events must agree tick by tick.
+    #     The front draws arrows from `cards.json` — the card already carries the ATTRIBUTED
+    #     share (split rule replayed and verified against real bodies by PF-SHARE), so the JS
+    #     never re-does that arithmetic and cannot drift from it. The price of that choice is
+    #     that the two files of the package must say the same thing, which is what this checks.
+    cards = json.load(open(os.path.join(SLICE_DIR, "cards.json"), encoding="utf-8"))
+    flow_ok = True
+    for oid in FOCI:
+        P = cards["entries"][str(oid)]["card"]["power"]
+        card_at = {}
+        for role, rows in (("paid", P["paid"]), ("got", P["received"]),
+                           ("took", P["extorted"]), ("lost", P["extorted_by"]),
+                           ("remit", P["remitted"]), ("recv", P["received_remit"])):
+            for r in rows:
+                card_at.setdefault(r["t"], []).append(role)
+        pkg_at = {}
+        for e in ev:
+            d = e.data or {}
+            if e.kind == "appropriate":
+                if any(o == oid for o, _v in d.get("payers", ())):
+                    pkg_at.setdefault(e.t, []).append("paid")
+                if any(o == oid for o, _v in d.get("receivers", ())):
+                    pkg_at.setdefault(e.t, []).append("got")
+            elif e.kind == "extort":
+                if oid in (d.get("takers") or []):
+                    pkg_at.setdefault(e.t, []).append("took")
+                if oid in (d.get("victims") or []):
+                    pkg_at.setdefault(e.t, []).append("lost")
+            elif e.kind == "delegate_remit":
+                if e.actor == oid:
+                    pkg_at.setdefault(e.t, []).append("remit")
+                if d.get("root") == oid:
+                    pkg_at.setdefault(e.t, []).append("recv")
+        same = ({t: sorted(v) for t, v in card_at.items()}
+                == {t: sorted(v) for t, v in pkg_at.items()})
+        flow_ok = flow_ok and same
+        n = sum(len(v) for v in card_at.values())
+        print(f"    (d) потоки #{oid}: карточка {n} ролей на {len(card_at)} тиках == события "
+              f"пакета {sum(len(v) for v in pkg_at.values())} на {len(pkg_at)}  "
+              f"{'✓ тик-в-тик' if same else '✗ РАСХОЖДЕНИЕ'}")
+        # and the mass the front will draw is the ATTRIBUTED one, not the pooled gross
+        T = P["totals"]
+        print(f"        рисуется приписанное: вымогательство {T['extort_attributed']} кг "
+              f"(брутто по тем же событиям {T['extort_gross']}), рента ±"
+              f"{T['rent_received']}/{T['rent_paid']}, нетто {T['net']}")
+
+    sync = own_ok and ship_ok and pos_ok and glob_ok and flow_ok
+
+    # ---- E2-HONEST: no caption without an event at its own tick ------------- #
+    print("\nE2-HONEST — подпись подкреплена событием ТОГО ЖЕ тика, не мотивом:")
+    # caption kind -> the event kind(s) that may license it
+    LICENCE = {
+        "seed": ("seed",), "birth": ("birth",), "death": ("death",),
+        "claim": ("claim",), "taken": ("claim", "inherit"), "lose": ("lose",),
+        "inherit": ("inherit",), "bequeathed": ("inherit",),
+        "mark": ("mark",), "unmark": ("unmark",),
+        "rent_paid": ("appropriate",), "rent_got": ("appropriate",),
+        "extort_took": ("extort",), "extort_lost": ("extort",),
+    }
+    by_t = {}
+    for e in ev:
+        by_t.setdefault(e.t, set()).add(e.kind)
+    honest = True
+    for oid in FOCI:
+        caps = cards["entries"][str(oid)]["captions"]
+        unbacked = [c for c in caps["items"]
+                    if not (set(LICENCE.get(c["kind"], ())) & by_t.get(c["t"], set()))]
+        # every caption must also carry the numbers it stands on (no bare assertion)
+        naked = [c for c in caps["items"] if not c.get("backing")]
+        # and the pruning must be declared, never silent
+        declared = ("flow_folded" in caps and "rule" in caps)
+        hit = not unbacked and not naked and declared
+        honest = honest and hit
+        print(f"    #{oid}: врезок {caps['n']}, без события того же тика {len(unbacked)}, "
+              f"без подкрепляющих чисел {len(naked)}, свёртка объявлена "
+              f"{'да' if declared else 'НЕТ'}  {'✓' if hit else '✗'}")
+        print(f"        потоков-событий {caps['flow_events']} -> в подписи "
+              f"{caps['flow_captioned']}, свёрнуто {caps['flow_folded']} "
+              f"(правило: {caps['rule']})")
+        if unbacked:
+            print(f"        ✗ пример: t={unbacked[0]['t']} [{unbacked[0]['kind']}] "
+                  f"{unbacked[0]['text'][:70]}")
+    # the E1 card SHA must NOT have moved: captions live in the entry, not in the card
+    anch = {"58": "aa87881cc8b26a60", "42": "c538e24f8f08817b"}
+    sha_ok = all(cards["entries"][o]["card"]["sha"] == a for o, a in anch.items())
+    honest = honest and sha_ok
+    print(f"    якоря карточки E1 не сдвинулись: "
+          + ", ".join(f"#{o} {cards['entries'][o]['card']['sha']}" for o in sorted(anch))
+          + f"  {'✓' if sha_ok else '✗ ЯКОРЬ УЕХАЛ'}")
+    ok = voff and det and sync and honest
     print(f"\n  E2-VOFF {'✓' if voff else '✗'} · E2-DET {'✓' if det else '✗'} · "
-          f"E2-SYNC {'✓' if sync else '✗'}")
+          f"E2-SYNC {'✓' if sync else '✗'} · E2-HONEST {'✓' if honest else '✗'}")
     print(HDR)
     assert voff, "E2-VOFF: the slice export moved the world"
     assert det, "E2-DET: the slice package is not deterministic"
     assert sync, "E2-SYNC: map / ownership / position do not reduce to one tick"
+    assert honest, "E2-HONEST: a caption is not backed by an event at its own tick"
     assert ok
     return 0
 

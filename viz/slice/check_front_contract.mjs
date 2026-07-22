@@ -69,6 +69,47 @@ for (const FOCUS of meta.slice.foci) {
               `жива на ${ticksAlive} тиках`);
 }
 
+// ---- Ф2: the flow index the arrows are drawn from ------------------------ //
+// The front builds this from cards.json (never re-deriving the extortion split in JS), so the
+// fields it reaches for must exist and every counterpart must be findable on the map at that
+// same tick — otherwise an arrow would point at nothing, or worse, silently not be drawn.
+for (const FOCUS of meta.slice.foci) {
+  const P = cards.entries[String(FOCUS)].card.power;
+  const snapAt = new Map(snaps.map((s) => [s.t, s]));
+  const rows = [];
+  for (const [role, rs, others] of [
+    ["paid", P.paid, "to"], ["got", P.received, "from"],
+    ["took", P.extorted, "victims"], ["lost", P.extorted_by, "takers"],
+    ["remit", P.remitted, "to_root"], ["recv", P.received_remit, "from"],
+  ]) {
+    for (const r of rs) {
+      const o = r[others];
+      rows.push({ role, t: r.t, mass: r.mass !== undefined ? r.mass : r.share,
+                  others: Array.isArray(o) ? o : [o] });
+    }
+  }
+  let unresolved = 0, missingSelf = 0, nullMass = 0, drawn = 0;
+  for (const r of rows) {
+    const B = snapAt.get(r.t);
+    if (!B) { unresolved++; continue; }
+    if (!B.pawns.find((p) => p[0] === FOCUS)) missingSelf++;
+    if (r.mass === null || r.mass === undefined) nullMass++;
+    for (const o of r.others) {
+      if (o === null || o === undefined) continue;
+      if (B.pawns.find((p) => p[0] === o)) drawn++; else unresolved++;
+    }
+  }
+  const ok = unresolved === 0 && missingSelf === 0;
+  if (!ok) fail(`#${FOCUS}: потоки — неразрешимых контрагентов ${unresolved}, ` +
+                `тиков без самой пешки ${missingSelf}`);
+  const T = P.totals;
+  console.log(`  #${FOCUS} потоки: ${rows.length} строк, ${drawn} стрелок разрешено, ` +
+              `контрагентов не найдено ${unresolved} ${ok ? "✓" : "✗"}`);
+  console.log(`        рисуется ПРИПИСАННОЕ ${T.extort_attributed} кг ` +
+              `(брутто по тем же событиям ${T.extort_gross}), нетто ${T.net}` +
+              (nullMass ? `; строк с неразрешимой долей ${nullMass} (рисуются без числа)` : ""));
+}
+
 // the caption layer of Ф3 will read events by tick; prove the index is dense and sorted
 let prev = -1, unsorted = 0;
 for (const ev of events) { if (ev.t < prev) unsorted++; prev = ev.t; }

@@ -116,8 +116,11 @@
       <div id="fWhy" class="k" style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 6px"></div>
       <div class="mrow"><span>владеет клетками</span><b id="fCells">—</b></div>
       <div class="mrow"><span>жива</span><b id="fAlive">—</b></div>
-      <div id="fNarr" class="k" style="max-height:150px;overflow:auto;white-space:pre-wrap;
-           border-left:2px solid var(--gold);padding-left:7px;margin-top:6px"></div>
+      <div id="fThesis" class="k" style="font-style:italic;color:var(--gold);margin:6px 0 2px"></div>
+      <div id="fBeats" style="margin-top:6px"></div>
+      <details style="margin-top:6px"><summary class="k" style="cursor:pointer">вся дуга целиком</summary>
+        <div id="fNarr" class="k" style="max-height:150px;overflow:auto;white-space:pre-wrap;
+             border-left:2px solid var(--gold);padding-left:7px;margin-top:4px"></div></details>
     </div>
     <div class="sec">
       <h3>Инвариант — персонаж</h3>
@@ -288,6 +291,26 @@ function boot(meta,snaps,events){
       let g=fl.find(x=>x._k===key); if(!g){g={_k:key,type:e.type,i:e.where[0],j:e.where[1],n:0,dm:0};fl.push(g);}
       g.n++; g.dm+=(e.dm||0); S.flashByTick.set(e.t,fl);
     }
+  }
+  // ---- E2 Ф2: the focus's flows, indexed by tick -------------------------- //
+  // Built from cards.json, NOT from events.jsonl. The card already carries the ATTRIBUTED
+  // share — the extortion pool split by the rule replayed from `_extort` and checked against
+  // real body deltas (gate PF-SHARE). Recomputing that split in JS would be a second
+  // implementation of the same arithmetic, i.e. a drift hazard and a fresh chance to draw the
+  // gross as if it were personal — the exact error виток 2 existed to kill. Gate E2-SYNC(d)
+  // holds card and events to the same story tick by tick.
+  S.flowByT=new Map();
+  if(FOCUS!==null && S.cards && S.cards.entries && S.cards.entries[String(FOCUS)]){
+    const P=S.cards.entries[String(FOCUS)].card.power;
+    const push=(t,o)=>{ const a=S.flowByT.get(t)||[]; a.push(o); S.flowByT.set(t,a); };
+    for(const r of P.paid)   push(r.t,{role:"paid", mass:r.mass, others:r.to,      where:r.where});
+    for(const r of P.received)push(r.t,{role:"got",  mass:r.mass, others:r.from,    where:r.where});
+    for(const r of P.extorted)push(r.t,{role:"took", mass:r.share,others:r.victims, where:r.where,
+                                        gross:r.gross, n:r.n_takers});
+    for(const r of P.extorted_by)push(r.t,{role:"lost",mass:r.share,others:r.takers,where:r.where,
+                                        gross:r.gross});
+    for(const r of P.remitted)push(r.t,{role:"remit",mass:r.mass, others:[r.to_root],where:null});
+    for(const r of P.received_remit)push(r.t,{role:"recv",mass:r.mass,others:[r.from],where:null});
   }
   S.marksMax=Math.max(1,...snaps.map(s=>(s.marks?s.marks.length:0)));
   buildChronFilter();
@@ -609,6 +632,93 @@ function drawGod(god,fr){
   mx.beginPath(); mx.arc(x,y,s*0.32,0,7); mx.fillStyle=aura; mx.fill();
 }
 
+
+// ---- E2 Ф2: flows and ties around the focus ------------------------------- //
+// Rent and seizure both happen INSIDE one cell — the payer and the owner are standing on it
+// together — so an arrow between cells would be a lie about the mechanism. The film already
+// fans co-located pawns out on a Fibonacci spiral (Э-5), so each has its own pixel and the
+// arrow is drawn between BODIES, which is where the mass actually moves.
+//
+// Direction is the direction of mass: `paid`/`remit` point away from the focus, `got`/`took`/
+// `recv` point at it, `lost` points away. The number beside the arrow is the ATTRIBUTED mass
+// straight from the card — never the pooled gross.
+const FLOW_STYLE={
+  paid :{col:"#7fb2ff", out:true,  lab:"рента"},
+  got  :{col:"#7fb2ff", out:false, lab:"рента"},
+  took :{col:"#ff5d6c", out:false, lab:"изъятие"},
+  lost :{col:"#ff5d6c", out:true,  lab:"изъятие"},
+  remit:{col:"#ffcf5d", out:true,  lab:"ремитта"},
+  recv :{col:"#ffcf5d", out:false, lab:"ремитта"},
+};
+function arrow(ctx,x0,y0,x1,y1,col,w,alpha){
+  const dx=x1-x0, dy=y1-y0, L=Math.hypot(dx,dy)||1;
+  ctx.save(); ctx.globalAlpha=alpha; ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=w;
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+  const ux=dx/L, uy=dy/L, h=6+w;
+  ctx.beginPath(); ctx.moveTo(x1,y1);
+  ctx.lineTo(x1-ux*h-uy*h*0.45, y1-uy*h+ux*h*0.45);
+  ctx.lineTo(x1-ux*h+uy*h*0.45, y1-uy*h-ux*h*0.45);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function drawFocusFlows(B,fr,fade){
+  if(FOCUS===null) return;
+  const pm=pawnMap(B);
+  const me=pm.get(FOCUS); if(!me) return;
+  const fx0=(me._px!=null?me._px:cellCx(me[2])), fy0=(me._py!=null?me._py:cellCy(me[1]));
+
+  // Dunbar ties — thin, under the arrows. `known` is already focus-only in a slice package.
+  if(S.layer.dunbar!==false && B.known){
+    fx.save(); fx.globalAlpha=0.22; fx.strokeStyle="#9fb3c8"; fx.lineWidth=1;
+    for(const [a1,b1] of B.known){
+      const o=(a1===FOCUS)?b1:(b1===FOCUS?a1:null); if(o===null)continue;
+      const q=pm.get(o); if(!q||q._px==null)continue;
+      fx.beginPath(); fx.moveTo(fx0,fy0); fx.lineTo(q._px,q._py); fx.stroke();
+    }
+    fx.restore();
+  }
+
+  const rows=S.flowByT.get(B.t)||[];
+  if(!rows.length) return;
+  let mmax=1e-9; for(const r of rows) mmax=Math.max(mmax,Math.abs(r.mass||0));
+  // A rentier's tick is a hairball: #42 peaks at 330 counterparts on one tick (median 42),
+  // where #58 never exceeds 2. So the arrows are CAPPED — and the cap announces itself in the
+  // caption below. A silent truncation reads as "this is everyone", which is the same lie by
+  // omission the gross-mass number told; drawn-vs-total is stated instead.
+  const CAP=10;
+  let shown=0, hidden=0;
+  for(const r of rows){
+    const st=FLOW_STYLE[r.role]; if(!st) continue;
+    const m=Math.abs(r.mass||0), w=1.2+2.8*(m/mmax);
+    const list=(r.others||[]).slice().sort((x,y)=>x-y);   // deterministic order
+    if(list.length>CAP) hidden+=list.length-CAP;
+    for(const o of list.slice(0,CAP)){
+      const q=pm.get(o); if(!q) continue;
+      shown++;
+      const qx=(q._px!=null?q._px:cellCx(q[2])), qy=(q._py!=null?q._py:cellCy(q[1]));
+      // pull the tips off the body centres so both ends stay readable
+      const dx=qx-fx0, dy=qy-fy0, L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L;
+      const r0=(me._r||6)+3, r1=(q._r||6)+3;
+      const ax=fx0+ux*r0, ay=fy0+uy*r0, bx=qx-ux*r1, by=qy-uy*r1;
+      if(st.out) arrow(fx,ax,ay,bx,by,st.col,w,0.35+0.55*fade);
+      else       arrow(fx,bx,by,ax,ay,st.col,w,0.35+0.55*fade);
+    }
+  }
+  // one compact caption per tick: what moved, and how much of it was THIS pawn's
+  const parts=[];
+  for(const role in FLOW_STYLE){
+    const rs=rows.filter(r=>r.role===role); if(!rs.length) continue;
+    const sum=rs.reduce((a,r)=>a+Math.abs(r.mass||0),0);
+    parts.push({col:FLOW_STYLE[role].col,
+                txt:FLOW_STYLE[role].lab+" "+(FLOW_STYLE[role].out?"−":"+")+sum.toFixed(3)});
+  }
+  fx.save(); fx.font="11px ui-monospace,monospace"; fx.globalAlpha=0.9;
+  let ty=14;
+  for(const p of parts){ fx.fillStyle=p.col; fx.fillText(p.txt,8,ty); ty+=13; }
+  if(hidden){ fx.fillStyle="#9fb3c8";
+    fx.fillText("стрелок показано "+shown+", скрыто "+hidden+" (предел "+CAP+" на связь)",8,ty); }
+  fx.restore();
+}
+
 // ============================ drawing: flash layer (Э-4) ============================
 function drawFlashes(){
   fx.clearRect(0,0,cF.width,cF.height);
@@ -635,6 +745,9 @@ function drawFlashes(){
       }
     }
   }
+  // ---- E2 Ф2: the focus's flows and ties, at THIS tick --------------------- //
+  drawFocusFlows(B,fr,fade0);
+
   for(const g of flashes){
     const x=cellCx(g.j), y=cellCy(g.i);
     const fade=Math.sin(Math.min(1,a)*Math.PI); // 0->1->0 over the tick
@@ -685,6 +798,7 @@ function drawFlashes(){
 // another T. That is the whole discipline of the slice: map, card and caption must reduce to
 // one tick or the game is lying about what is happening (gate E2-SYNC).
 let _focusInit=false;
+const esc=(t)=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 function updateFocus(){
   if(FOCUS===null) return;
   const sec=$("focusSec"); if(!sec) return;
@@ -696,6 +810,26 @@ function updateFocus(){
     ? cells.length+" — "+cells.map(o=>"("+o[0]+","+o[1]+")").join(" ")
     : "нет";
   $("fAlive").textContent=here?("да, в ("+here[1]+","+here[2]+"), тело "+here[3].toFixed(3)):"нет";
+  // ---- the moving narrative: frame above, event insets at THIS tick ------- //
+  // Insets are a PROJECTION of the same events the map draws — generated once at export time
+  // (pawn_card.event_captions) and shipped in the package, never composed here. A caption
+  // written on the front would be a second source of truth sitting beside the map, free to
+  // drift from it; gate E2-HONEST holds every line to an event at its own tick.
+  const beats=$("fBeats");
+  if(beats && S._caps){
+    const now=S._caps.filter(c=>c.t===B.t);
+    const past=S._caps.filter(c=>c.t<B.t);
+    const prev=past.length?past[past.length-1]:null;
+    let html="";
+    for(const c of now)
+      html+='<div style="border-left:2px solid #ff5d6c;padding-left:7px;margin:3px 0">'
+          + '<b>t='+c.t+'</b> '+esc(c.text)+'</div>';
+    if(!now.length && prev)
+      html='<div style="border-left:2px solid #33333d;padding-left:7px;margin:3px 0;opacity:.55">'
+          + '<b>t='+prev.t+'</b> '+esc(prev.text)+'</div>';
+    if(!now.length && !prev) html='<div class="k" style="opacity:.5">— пока ничего не случилось</div>';
+    beats.innerHTML=html;
+  }
   if(_focusInit) return;                       // static parts: paint once
   _focusInit=true;
   $("fOid").textContent="#"+FOCUS;
@@ -707,6 +841,10 @@ function updateFocus(){
     '<span style="border:1px solid #333a;border-radius:9px;padding:1px 6px;white-space:nowrap">'
     + String(r[0]) + ": <b>" + String(r[1]) + "</b></span>").join("");
   $("fNarr").textContent=e.narrative||"";
+  // the frame: the arc's thesis line, one connected thread above the beats
+  const th=(e.narrative||"").split(String.fromCharCode(10)).find(l=>l.startsWith("Тезис:"));
+  $("fThesis").textContent=th||"";
+  S._caps=(e.captions&&e.captions.items)||[];
 }
 
 // ============================ side panel ============================
