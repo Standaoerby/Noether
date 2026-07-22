@@ -194,8 +194,14 @@ def relationship_history(log, snapshots, oid):
         "totals": {
             "n_spoke": len(spoke), "n_heard": len(heard),
             "n_extorted": len(took), "n_extorted_by": len(taken_from),
-            "mass_extorted": _q(sum(x["amount"] or 0 for x in took), 4),
-            "mass_lost_to_extort": _q(sum(x["amount"] or 0 for x in taken_from), 4),
+            # GROSS, and named so. An extortion pools the take over the cell and splits it
+            # among the takers; the event carries only the pool. Summing `amount` therefore
+            # measures EVENTS THIS PAWN WAS PART OF, not mass it personally received — for
+            # #58 in the showcase scene the gap is 203.63 gross vs 31.25 attributed (×6.5).
+            # The personal figure lives in `power.totals.extort_attributed`, which replays
+            # the split rule and is checked against real body deltas by gate PF-SHARE.
+            "mass_extorted_gross": _q(sum(x["amount"] or 0 for x in took), 4),
+            "mass_lost_to_extort_gross": _q(sum(x["amount"] or 0 for x in taken_from), 4),
             "mass_remitted": _q(sum(x["amount"] or 0 for x in remitted), 4),
         },
     }
@@ -310,6 +316,204 @@ def property_history(log, oid, t_end=None):
 
 
 # --------------------------------------------------------------------------- #
+#  5. ReputationHistory — LOG (mark / unmark as a STATE, not a counter)        #
+# --------------------------------------------------------------------------- #
+def reputation_history(log, oid, t_end=None):
+    """Branding over time. Two independent ledgers brand a pawn: `extort` (Фаза 4 — a seized
+    owner testifies and every taker is barred from EXTORT henceforth) and `delegate` (the
+    REVOKE reputation tooth — a defector who refused to remit is barred from the network).
+    Both are membership sets, so the honest projection is SPANS, not a tally: from when to
+    when was this pawn branded, and is the brand still on it at the end.
+
+    A brand is sticky by construction — nothing in Polis removes an oid from a mark-ledger
+    while it lives (the G2 GC sweeps DEAD oids only, and the emitter diffs over the living
+    set precisely so that reclamation cannot masquerade as an un-branding). So `unmark` is
+    expected to be rare-to-absent, and an empty projection is a fact about the scene, not a
+    hole in the reader."""
+    if t_end is None:
+        t_end = max((e.t for e in log.events), default=0)
+    marks = {}
+    for e in log.events:
+        if e.kind in ("mark", "unmark") and e.actor == oid:
+            marks.setdefault((e.data or {}).get("ledger"), []).append((e.t, e.kind))
+    by_ledger, ever, ticks = {}, False, 0
+    for led in sorted(marks, key=str):
+        spans, open_t = [], None
+        for t, kind in marks[led]:
+            if kind == "mark" and open_t is None:
+                open_t = t
+            elif kind == "unmark" and open_t is not None:
+                spans.append([open_t, t]); open_t = None
+        if open_t is not None:
+            spans.append([open_t, None])            # still branded at the end of the run
+        held = sum((t_end if b is None else b) - a for a, b in spans)
+        ticks += held
+        ever = ever or bool(spans)
+        by_ledger[led] = {
+            "spans": spans,
+            "n_marks": sum(1 for _t, k in marks[led] if k == "mark"),
+            "n_unmarks": sum(1 for _t, k in marks[led] if k == "unmark"),
+            "ticks_branded": held,
+            "branded_at_end": bool(spans and spans[-1][1] is None),
+            "first_t": spans[0][0] if spans else None,
+        }
+    return {
+        "source": "log",
+        "by_ledger": by_ledger,
+        "ever_branded": ever,
+        "ticks_branded": ticks,
+        "branded_at_end": sorted(l for l, v in by_ledger.items() if v["branded_at_end"]),
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  6. PowerFlowHistory — LOG (every gram in and out, roles kept APART)         #
+# --------------------------------------------------------------------------- #
+def extort_share(total, takers, oid):
+    """This pawn's share of one extortion — the code's arithmetic replayed, not a guess.
+
+    `Polis._extort` pools the seizure T over the cell and splits it EVENLY among the takers
+    (sorted by oid), the last one taking the float remainder so the pool closes exactly:
+
+        share = T / len(takers)
+        for tk in takers[:-1]: tk.body += share
+        takers[-1].body += (T - given)
+
+    `takers` is emitted in that same order, so the attribution is exact and verifiable —
+    gate PF-SHARE checks it against the real body deltas rather than trusting this comment."""
+    n = len(takers)
+    if n == 0 or oid not in takers:
+        return None
+    share = total / n
+    if oid == takers[-1]:
+        return total - share * (n - 1)
+    return share
+
+
+def power_flow(log, oid):
+    """Where this pawn's mass came from and where it went — three mechanisms, six roles, kept
+    strictly APART. Conflating them is exactly the trap this projection exists to avoid: in
+    the showcase scene #58 is an extortion TAKER 174 times and an appropriation PAYER 174
+    times, which is the same integer twice for two opposite roles. They are different events
+    (disjoint log entries, different `kind`); the counters below prove it by construction and
+    `coincidence` reports the real reason the numbers agree.
+
+    ATTRIBUTION HONESTY. A gross event total is not a personal figure. Per role:
+      * appropriate payer/receiver — the ledger publishes per-oid amounts. EXACT.
+      * extort taker — the pool splits evenly with a documented remainder rule. EXACT
+        (see `extort_share`, verified by gate PF-SHARE).
+      * extort VICTIM — each victim loses rho*body, i.e. in proportion to its OWN body, and
+        the log publishes only the pooled total. NOT resolvable when a cell holds more than
+        one victim. Those events are counted in `gross` and in `n_unresolved`, and are NOT
+        folded into `attributed`. Two honest numbers beat one invented one.
+      * delegate_remit — 1:1, actor to root. EXACT.
+    """
+    paid, got, took, taken, remit, recv = [], [], [], [], [], []
+    # (t, cell) -> the other side of each role, so `coincidence` can be asked SYMMETRICALLY.
+    # Both showcase pawns produce an exact integer twice — #58 pays rent 174× and extorts
+    # 174×, #42 collects rent 387× and is extorted 387× — and in both cases the answer is the
+    # same mechanism seen from opposite ends, not a double count. The projection reports it
+    # rather than leaving the reader to wonder.
+    took_at, paid_at, got_at, taken_at = {}, {}, {}, {}
+    n_actor = 0
+    # Rows are rounded for display; TOTALS are accumulated RAW and rounded once at the end.
+    # Summing already-rounded rows would drift by ~5e-5 per row — over 10^5 rows that is a
+    # visible error, and gate PF-BALANCE (Σ over the whole colony == the canon aggregate)
+    # would go red for a reason that has nothing to do with attribution.
+    raw = dict.fromkeys(("rent_paid", "rent_received", "extort_gross", "extort_attributed",
+                         "extort_solo", "extorted_from_gross", "extorted_from_attributed",
+                         "remitted", "received_remit"), 0.0)
+    for e in log.events:
+        d = e.data or {}
+        cell = list(e.where) if e.where else None
+        if e.kind == "appropriate":
+            rec = [o for o, _v in d.get("receivers", ())]
+            pay = [o for o, _v in d.get("payers", ())]
+            for o, v in d.get("payers", ()):
+                if o == oid:
+                    paid.append({"t": e.t, "where": cell, "to": sorted(rec), "mass": _q(v)})
+                    paid_at[(e.t, tuple(cell or ()))] = sorted(rec)
+                    raw["rent_paid"] += float(v)
+            for o, v in d.get("receivers", ()):
+                if o == oid:
+                    got.append({"t": e.t, "where": cell, "from": sorted(pay), "mass": _q(v)})
+                    got_at[(e.t, tuple(cell or ()))] = sorted(pay)
+                    raw["rent_received"] += float(v)
+        elif e.kind == "extort":
+            ts, vs = list(d.get("takers") or []), sorted(d.get("victims") or [])
+            total = float(e.dm if e.dm is not None else (d.get("amount") or 0.0))
+            if oid in ts:
+                n_actor += (e.actor == oid)
+                share = extort_share(total, ts, oid)
+                took.append({"t": e.t, "where": cell, "victims": vs, "n_takers": len(ts),
+                             "gross": _q(total), "share": _q(share)})
+                took_at[(e.t, tuple(cell or ()))] = vs
+                raw["extort_gross"] += total
+                raw["extort_attributed"] += share
+                if len(ts) == 1:
+                    raw["extort_solo"] += total
+            if oid in vs:
+                # resolvable only when this pawn is the sole victim: a per-victim seizure is
+                # rho*body and the ledger publishes only the pool
+                lone = len(vs) == 1
+                taken.append({"t": e.t, "where": cell, "takers": sorted(ts),
+                              "n_victims": len(vs), "gross": _q(total),
+                              "share": _q(total) if lone else None})
+                taken_at[(e.t, tuple(cell or ()))] = sorted(ts)
+                raw["extorted_from_gross"] += total
+                if lone:
+                    raw["extorted_from_attributed"] += total
+        elif e.kind == "delegate_remit":
+            amt = float(d.get("amount") or e.dm or 0.0)
+            if e.actor == oid:
+                remit.append({"t": e.t, "to_root": d.get("root"), "mass": _q(amt)})
+                raw["remitted"] += amt
+            if d.get("root") == oid:
+                recv.append({"t": e.t, "from": e.actor, "mass": _q(amt)})
+                raw["received_remit"] += amt
+
+    both = sorted(set(paid_at) & set(took_at))
+    landlord = [k for k in both if took_at[k] == paid_at[k]]
+    mirror = sorted(set(got_at) & set(taken_at))            # the rentier's side of the same act
+    tenant = [k for k in mirror if set(taken_at[k]) <= set(got_at[k])]
+    unres = [r for r in taken if r["share"] is None]
+    tot = {k: _q(v, 9) for k, v in raw.items()}     # aggregates: 9 dp, not display rounding
+    tot["extorted_from_unresolved"] = len(unres)
+    tot["net"] = _q(raw["rent_received"] + raw["extort_attributed"] + raw["received_remit"]
+                    - raw["rent_paid"] - raw["extorted_from_attributed"] - raw["remitted"], 9)
+    return {
+        "source": "log",
+        # the roles, explicitly apart — this block IS the 174/174 answer
+        "roles": {
+            "appropriate": {"payer": len(paid), "receiver": len(got)},
+            "extort": {"taker": len(took), "taker_as_actor": n_actor, "victim": len(taken)},
+            "delegate_remit": {"remitter": len(remit), "root": len(recv)},
+        },
+        "coincidence": {
+            # tenant's side: paid rent here and robbed the landlord here, same tick
+            "paid_and_took_same_tick_cell": len(both),
+            "victim_was_the_landlord": len(landlord),
+            "of_n_paid": len(paid), "of_n_took": len(took),
+            # landlord's side: collected rent here and was robbed here, same tick
+            "received_and_was_robbed_same_tick_cell": len(mirror),
+            "robbers_were_the_tenants": len(tenant),
+            "of_n_received": len(got), "of_n_robbed": len(taken),
+        },
+        "attribution": {
+            "extort_taker": "exact — even split, remainder to the last taker (polis._extort)",
+            "extort_victim": ("exact only where this pawn was the sole victim; a per-victim "
+                              "seizure is rho*body and the ledger publishes only the pool"),
+            "appropriate": "exact — per-oid amounts are in the event",
+            "delegate_remit": "exact — one remitter, one root",
+        },
+        "paid": paid, "received": got,
+        "extorted": took, "extorted_by": taken,
+        "remitted": remit, "received_remit": recv,
+        "totals": tot,
+    }
+
+
+# --------------------------------------------------------------------------- #
 #  Assembler                                                                   #
 # --------------------------------------------------------------------------- #
 def pawn_card(log, snapshots, oid):
@@ -323,7 +527,9 @@ def pawn_card(log, snapshots, oid):
         "house": house_history(log, oid, houses=H),
         "relationships": relationship_history(log, snapshots, oid),
         "property": property_history(log, oid),
-        "deferred": ["ReputationHistory", "PowerFlowHistory"],   # виток 2 Ф2
+        "reputation": reputation_history(log, oid),
+        "power": power_flow(log, oid),
+        "deferred": [],                       # виток 2 Ф2: all six projections are live
     }
     card["sha"] = card_sha(card)
     return card
@@ -359,16 +565,33 @@ def _pl(n, one, few, many):
 
 
 def _arc_of(card):
-    """Classify the life into an arc from the projections alone."""
+    """Classify the life into an arc from the projections alone.
+
+    Виток 2 refines the top of the ladder. Виток 1 read "extorted often, never extorted from"
+    as ВЛАСТЬ — but that stands on event COUNTS, and counts do not know that an extortion is
+    a pool shared with co-takers, nor that the same pawn may be paying rent all the while. The
+    showcase hero is exactly that case: 174 seizures, 0 seizures against it, and a NEGATIVE
+    net across every power flow (−2.07 kg: it clawed back less by force than it paid in rent,
+    and its own land yielded nothing). Calling that власть is the same over-attribution the
+    gross mass figure made, one level up. So the net decides between force that PAYS and force
+    that merely SURVIVES."""
     pr, re_, ch = card["property"], card["relationships"], card["chronicle"]
+    P = card["power"]
     t = re_["totals"]
     death_t = (ch["death"] or {}).get("t")
     ten = pr["tenures"]
     lost_alive = bool(ten and death_t is not None and ten[-1]["to_t"] < death_t - 1)
+    net = P["totals"]["net"]
     if t["n_extorted"] and not t["n_extorted_by"]:
-        return "власть" if not lost_alive else "падение с высоты"
+        if lost_alive:
+            return "падение с высоты"
+        return "власть" if net > 0 else "сила без прибытка"
     if t["n_extorted_by"] and t["n_extorted_by"] > t["n_extorted"]:
-        return "жертва"
+        # The SAME defect one level up. "Extorted from more often than it extorts" is a
+        # count, and the contrast pawn of the showcase is preyed on 387 times — because it
+        # is the landlord everyone squats on. It still nets +190 kg, outlives the run and
+        # leaves 178 heirs. Calling that a victim is the gross-mass error wearing a label.
+        return "жертва" if net < 0 else "рантье под данью"
     if lost_alive:
         return "падение"
     if pr["ticks_holding"]:
@@ -379,6 +602,7 @@ def _arc_of(card):
 def narrate_card(card, title=None):
     """The card as prose. Deterministic (pure function of the card), LLM-ready."""
     ch, ho, re_, pr = card["chronicle"], card["house"], card["relationships"], card["property"]
+    rep, P = card["reputation"], card["power"]
     oid, t = card["oid"], re_["totals"]
     org, dth, life = ch["origin"], ch["death"], ch["lifespan"]
     arc = _arc_of(card)
@@ -417,15 +641,68 @@ def narrate_card(card, title=None):
                      f"безземельной.")
 
     # III. власть и связи
+    # Attribution discipline: an extortion is a POOL split among its takers, so "участвовала
+    # в N изъятиях" is the only thing the event count licenses. The personal figure is the
+    # replayed share (power.totals.extort_attributed), and the gross is named as gross so the
+    # two can never again be read as one number.
     if t["n_extorted"]:
-        L.append(f"Брала силой: {_pl(t['n_extorted'],'изъятие','изъятия','изъятий')} на {t['mass_extorted']} кг чужого тела.")
+        att, gross = P["totals"]["extort_attributed"], P["totals"]["extort_gross"]
+        line = f"Участвовала в {_pl(t['n_extorted'],'изъятии','изъятиях','изъятиях')} чужого тела"
+        if P["roles"]["extort"]["taker_as_actor"] < t["n_extorted"]:
+            line += (f" (заводилой — в {P['roles']['extort']['taker_as_actor']}, "
+                     f"в остальных делила добычу с другими)")
+        L.append(line + f"; её доля при равном дележе — {att:.4f} кг из {gross:.4f} кг "
+                        f"изъятых на этих клетках.")
     if t["n_extorted_by"]:
-        L.append(f"И сама была добычей: у неё отняли {_pl(t['n_extorted_by'],'раз','раза','раз')} "
-                 f"({t['mass_lost_to_extort']} кг).")
+        lost = P["totals"]["extorted_from_attributed"]
+        unres = P["totals"]["extorted_from_unresolved"]
+        tail = (f" (ещё {unres} — с другими жертвами на клетке, подушевая доля не выводима)"
+                if unres else "")
+        L.append(f"И сама была добычей: у неё отняли {_pl(t['n_extorted_by'],'раз','раза','раз')}, "
+                 f"{lost:.4f} кг{tail}.")
     elif t["n_extorted"]:
         L.append("При этом её саму не тронул никто — ни одного изъятия против неё.")
+    # the rent line: the two roles of appropriation, stated apart
+    R, C = P["roles"]["appropriate"], P["coincidence"]
+    if R["payer"] or R["receiver"]:
+        if R["receiver"] == 0 and R["payer"]:
+            L.append(f"С ренты не получила ничего: {_pl(R['payer'],'раз','раза','раз')} платила "
+                     f"дань на чужой земле ({P['totals']['rent_paid']:.4f} кг), а со своей — ни грамма.")
+        elif R["payer"] == 0:
+            L.append(f"Жила рантье: {_pl(R['receiver'],'раз','раза','раз')} получала дань "
+                     f"({P['totals']['rent_received']:.4f} кг), не заплатив ни разу.")
+        else:
+            L.append(f"Рента шла в обе стороны: получила {P['totals']['rent_received']:.4f} кг "
+                     f"({R['receiver']}×), отдала {P['totals']['rent_paid']:.4f} кг ({R['payer']}×).")
+    if C["victim_was_the_landlord"] and C["of_n_paid"]:
+        L.append(f"И это один и тот же жест: в {C['victim_was_the_landlord']} случаях из "
+                 f"{C['of_n_paid']} она платила дань владельцу клетки и в тот же день на той же "
+                 f"клетке отнимала у него силой.")
+    if C["robbers_were_the_tenants"] and C["of_n_received"]:
+        L.append(f"С другого конца — тот же жест: в {C['robbers_were_the_tenants']} случаях из "
+                 f"{C['of_n_received']} те, кто платил ей дань за клетку, в тот же день на той "
+                 f"же клетке обирали её саму. Рента и грабёж здесь — две стороны одного стояния "
+                 f"на чужой земле.")
+    net = P["totals"]["net"]
+    if P["roles"]["extort"]["taker"] or R["payer"] or R["receiver"]:
+        verdict = ("вышла в минус" if net < 0 else "вышла в плюс" if net > 0 else "вышла в ноль")
+        L.append(f"Итог по всем властным потокам: {net:+.4f} кг — {verdict}.")
     if t["mass_remitted"]:
         L.append(f"Отчисляла наверх: {t['mass_remitted']} кг ушло корню делегирования.")
+    # III-bis. клеймо
+    if rep["ever_branded"]:
+        for led in sorted(rep["by_ledger"]):
+            b = rep["by_ledger"][led]
+            if not b["spans"]:
+                continue
+            what = {"extort": "как вымогатель", "delegate": "как отказчик от ремитты"}.get(led, led)
+            end = ("и клеймо осталось на ней до конца" if b["branded_at_end"]
+                   else f"клеймо сняли на дне {b['spans'][-1][1]}")
+            L.append(f"Клеймена {what} на дне {b['first_t']} — {end} "
+                     f"({_pl(b['ticks_branded'],'тик','тика','тиков')} под клеймом).")
+    elif P["roles"]["extort"]["taker"]:
+        L.append("Клейма не носила ни разу: в этой сцене свидетельствовать против вымогателя "
+                 "некому — репутационный зуб включён только для делегирования.")
     if re_["n_known"]:
         voice = (f"заговорила {_pl(t['n_spoke'],'раз','раза','раз')}" if t["n_spoke"]
                  else "не заговорила ни разу")
@@ -457,16 +734,28 @@ def narrate_card(card, title=None):
 def _thesis(card, arc):
     """The arc compressed to one line — the bridge the WO asks for."""
     ho, re_, pr, ch = card["house"], card["relationships"], card["property"], card["chronicle"]
-    t = re_["totals"]
+    P = card["power"]
+    t, PT = re_["totals"], card["power"]["totals"]
     bits = []
     if ch["origin"] and ch["origin"]["kind"] == "seed":
         bits.append("основатель")
     if pr["ticks_holding"]:
-        bits.append(f"держала землю {_pl(pr['ticks_holding'],'тик','тика','тиков')}")
+        held = f"держала землю {_pl(pr['ticks_holding'],'тик','тика','тиков')}"
+        if P["roles"]["appropriate"]["receiver"] == 0:
+            held += ", не собрав с неё ни грамма"
+        else:
+            held += f" и собрала с неё {PT['rent_received']:.0f} кг дани"
+        bits.append(held)
     if t["n_extorted"] and not t["n_extorted_by"]:
-        bits.append(f"брала у других {_pl(t['n_extorted'],'раз','раза','раз')} и не отдала ничего")
+        bits.append(f"участвовала в {_pl(t['n_extorted'],'изъятии','изъятиях','изъятиях')} "
+                    f"на {PT['extort_attributed']:.2f} кг своей доли")
     elif t["n_extorted_by"]:
-        bits.append(f"отдала силой {t['mass_lost_to_extort']} кг")
+        bits.append(f"отдала силой {PT['extorted_from_attributed']:.0f} кг "
+                    f"и всё равно осталась в плюсе ({PT['net']:+.0f} кг)"
+                    if PT["net"] > 0 else
+                    f"отдала силой {PT['extorted_from_attributed']:.4f} кг")
+    if PT["net"] < 0 and (t["n_extorted"] or P["roles"]["appropriate"]["payer"]):
+        bits.append(f"и всё равно вышла в минус ({PT['net']:+.2f} кг)")
     if not t["n_spoke"] and t["n_heard"]:
         bits.append("не сказав ни слова")
     if ho["n_children"]:

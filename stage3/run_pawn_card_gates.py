@@ -36,7 +36,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sim_eventlog import EventLog                                       # noqa: E402
 from stage3.polis import Polis, polis_fingerprint                       # noqa: E402
 from stage3.viz_export import run_capture                               # noqa: E402
-from stage3.pawn_card import pawn_card, card_sha, replay_owners         # noqa: E402
+from stage3.pawn_card import (pawn_card, card_sha, replay_owners,       # noqa: E402
+                              extort_share, power_flow)
 from stage3.export_pawn_card import e1_scene                            # noqa: E402
 
 HDR = "=" * 78
@@ -51,6 +52,30 @@ def _scene(days=400):
     (виток 2): with the mirror off there are no claim/lose/inherit events and Property would
     be empty rather than wrong, which is the failure mode a gate must not sleep through."""
     return e1_scene(seed=7, days=days)
+
+
+class _ExtortProbe(Polis):
+    """Wraps `_extort` on the stage3 side (canon and polis.py untouched — the `_do_claims` /
+    `_appropriate` precedent) and records the REAL per-pawn body deltas the seizure produced.
+
+    This is what makes PF-SHARE a verification instead of a reading: the card attributes each
+    taker's share by replaying the documented split rule, and this probe measures what the
+    bodies actually did. If the two disagree, the card is over-attributing — the exact class
+    of error the виток-1 `mass_extorted` had."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.gain, self.loss = {}, {}          # (t, oid) -> mass
+
+    def _extort(self, t):
+        before = {a.oid: a.body for a in self.pop}
+        super()._extort(t)                     # the mechanism runs unchanged
+        for a in self.pop:
+            d = a.body - before.get(a.oid, a.body)
+            if d > 1e-12:
+                self.gain[(t, a.oid)] = self.gain.get((t, a.oid), 0.0) + d
+            elif d < -1e-12:
+                self.loss[(t, a.oid)] = self.loss.get((t, a.oid), 0.0) - d
 
 
 def _property_from_snapshots(snapshots, oid):
@@ -182,6 +207,76 @@ def main():
     print(f"    источник карточки: {pr['source']}   акты владения в карточке: {pr['n_acts']}")
     faithful_own = own_ok and read_ok
 
+    # ---- PF-SHARE: the split rule, verified against real bodies ------------ #
+    print("\nPF-SHARE — приписанная доля вымогателя vs РЕАЛЬНАЯ дельта тела:")
+    wp = _ExtortProbe(EventLog(), _scene())
+    for _ in range(cfg.days):
+        wp.step()
+    probe_clean = (wp.state_fingerprint() == w_clean.state_fingerprint()
+                   and polis_fingerprint(wp) == polis_fingerprint(w_clean))
+    print(f"    обёртка _extort прозрачна: state_fp {wp.state_fingerprint()} "
+          f"{'✓' if probe_clean else '✗ ЗОНД СДВИНУЛ МИР'}")
+    claimed = {}                       # (t, oid) -> share replayed from the log
+    seized = {}                        # (t, oid) -> pooled loss the log ascribes to victims
+    for e in wp.log.events:
+        if e.kind != "extort":
+            continue
+        d = e.data or {}
+        ts, vs = list(d.get("takers") or []), list(d.get("victims") or [])
+        total = float(e.dm if e.dm is not None else (d.get("amount") or 0.0))
+        for o in ts:
+            claimed[(e.t, o)] = claimed.get((e.t, o), 0.0) + extort_share(total, ts, o)
+        if len(vs) == 1:               # the only case the card claims is resolvable
+            seized[(e.t, vs[0])] = seized.get((e.t, vs[0]), 0.0) + total
+    worst_g = max((abs(v - wp.gain.get(k, 0.0)) for k, v in claimed.items()), default=0.0)
+    miss_g = sorted(set(claimed) ^ set(wp.gain))
+    worst_l = max((abs(v - wp.loss.get(k, 0.0)) for k, v in seized.items()), default=0.0)
+    share_ok = (not miss_g) and worst_g < 1e-9 and worst_l < 1e-9
+    print(f"    событий extort={sum(1 for e in wp.log.events if e.kind=='extort')}, "
+          f"пар (тик,такер)={len(claimed)}, измеренных приростов={len(wp.gain)}")
+    print(f"    max |приписано - реально получено|   = {worst_g:.3e}  "
+          f"{'✓' if worst_g < 1e-9 else '✗'}   (несопоставленных пар: {len(miss_g)})")
+    print(f"    max |приписано - реально утрачено|   = {worst_l:.3e}  "
+          f"{'✓' if worst_l < 1e-9 else '✗'}   (только одиночные жертвы, n={len(seized)})")
+    # and the mirror claim: multi-victim seizures are genuinely NOT resolvable from the log
+    multi = [e for e in wp.log.events if e.kind == "extort"
+             and len(((e.data or {}).get("victims") or [])) > 1]
+    if multi:
+        e0 = multi[0]
+        vs0 = sorted((e0.data or {}).get("victims") or [])
+        real = [round(wp.loss.get((e0.t, v), 0.0), 6) for v in vs0]
+        print(f"    много-жертвенных событий={len(multi)}; пример t={e0.t}: жертвы {vs0}, "
+              f"реально утрачено {real} — из лога (только пул {round(float(e0.dm), 6)}) не выводимо ✓")
+    else:
+        print(f"    много-жертвенных событий в этой сцене нет (n=0) — правило п.3 не активируется")
+
+    # ---- PF-BALANCE: the flows close against the canonical aggregates ------ #
+    everyone = sorted({a.oid for a in wp.pop} |
+                      {e.actor for e in wp.log.events if e.actor is not None})
+    sum_att = sum(power_flow(wp.log, o)["totals"]["extort_attributed"] for o in everyone)
+    canon_ext = float(getattr(wp, "_extorted_total", 0.0))
+    bal_ok = abs(sum_att - canon_ext) < 1e-6
+    print(f"\nPF-BALANCE — Σ приписанных долей по ВСЕМ пешкам vs канон-агрегат:")
+    print(f"    Σ extort_attributed = {sum_att:.6f}   _extorted_total = {canon_ext:.6f}  "
+          f"{'✓ сходится' if bal_ok else '✗ РАСХОДИТСЯ'}")
+
+    # ---- REP-FAITHFUL: mark/unmark replay == the real mark-ledgers --------- #
+    print("\nREP-FAITHFUL — реплей mark/unmark == живое содержимое G2-реестров:")
+    rep_ok, marked = True, {"extort": set(), "delegate": set()}
+    for e in wp.log.events:
+        if e.kind in ("mark", "unmark"):
+            led = (e.data or {}).get("ledger")
+            (marked[led].add if e.kind == "mark" else marked[led].discard)(e.actor)
+    live = {a.oid for a in wp.pop}
+    for led, attr in (("extort", "_extort_marks"), ("delegate", "_delegate_marks")):
+        real = set(getattr(wp, attr, ()) or ()) & live
+        hit = (marked[led] & live) == real
+        rep_ok = rep_ok and hit
+        print(f"    {led:<9} по логу={len(marked[led] & live):<5} в реестре={len(real):<5} "
+              f"{'✓' if hit else '✗'}   (всего клейм в логе: {len(marked[led])})")
+
+    power_ok = share_ok and bal_ok and rep_ok and probe_clean
+
     # ---- E1-DET ----------------------------------------------------------- #
     w_b, snaps_b = run_capture(_scene(), every=1)
     card_b = pawn_card(w_b.log, snaps_b, FOCAL)
@@ -199,17 +294,34 @@ def main():
           f"глубина={ho['generation_depth']} детей={ho['n_children']} размер дома={ho['house_size']}")
     print(f"    relations : знал={re_['n_known']} говорил={re_['totals']['n_spoke']} "
           f"слышал={re_['totals']['n_heard']} вымогал={re_['totals']['n_extorted']}× "
-          f"({re_['totals']['mass_extorted']} кг) у него отняли={re_['totals']['n_extorted_by']}×")
+          f"(брутто {re_['totals']['mass_extorted_gross']} кг) "
+          f"у него отняли={re_['totals']['n_extorted_by']}×")
     print(f"    property  : владений={pr['n_tenures']} тиков с землёй={pr['ticks_holding']} "
           f"пик={pr['peak_cells']} клеток, финал={len(pr['final_cells'])}")
+    rp, pw = card["reputation"], card["power"]
+    print(f"    reputation: клеймён когда-либо={rp['ever_branded']} тиков под клеймом="
+          f"{rp['ticks_branded']} реестры={sorted(rp['by_ledger']) or '—'}")
+    r, T, co = pw["roles"], pw["totals"], pw["coincidence"]
+    print(f"    power     : РОЛИ РАЗДЕЛЬНО — аппроприация: плательщик={r['appropriate']['payer']} "
+          f"получатель={r['appropriate']['receiver']}; вымогательство: такер={r['extort']['taker']} "
+          f"(из них actor={r['extort']['taker_as_actor']}) жертва={r['extort']['victim']}; "
+          f"ремитта: отдал={r['delegate_remit']['remitter']} принял={r['delegate_remit']['root']}")
+    print(f"                масса: рента уплачена={T['rent_paid']} получена={T['rent_received']}; "
+          f"вымогательство брутто={T['extort_gross']} ПРИПИСАНО={T['extort_attributed']} "
+          f"соло={T['extort_solo']}; нетто={T['net']}")
+    print(f"                совпадение ролей: платил и отнимал в одном (тик,клетка) "
+          f"{co['paid_and_took_same_tick_cell']}× из {co['of_n_paid']}; "
+          f"жертва == рантье {co['victim_was_the_landlord']}×")
 
-    ok = voff and faithful and faithful_own and det
+    ok = voff and faithful and faithful_own and power_ok and det
     print(f"\n  E1-VOFF {'✓' if voff else '✗'} · E1-FAITHFUL {'✓' if faithful else '✗'} · "
-          f"E1-FAITHFUL-OWN {'✓' if faithful_own else '✗'} · E1-DET {'✓' if det else '✗'}")
+          f"E1-FAITHFUL-OWN {'✓' if faithful_own else '✗'} · PF-SHARE/BALANCE/REP "
+          f"{'✓' if power_ok else '✗'} · E1-DET {'✓' if det else '✗'}")
     print(HDR)
     assert voff, "E1-VOFF: the reader moved the world"
     assert faithful, "E1-FAITHFUL: the log does not reproduce the live population"
     assert faithful_own, "E1-FAITHFUL-OWN: the ledger is not a mirror of ownership"
+    assert power_ok, "PF-SHARE/PF-BALANCE/REP-FAITHFUL: the flow attribution does not hold"
     assert det, "E1-DET: the card is not deterministic"
     assert ok
     return 0

@@ -35,6 +35,10 @@ dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:.15rem .8rem}
 dt{color:var(--dim);font:400 .85rem/1.5 system-ui,sans-serif}
 dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
 .spark{width:100%;height:44px;display:block;margin-top:.6rem}
+.wide{margin-top:1rem}
+.note{margin:0 0 .8rem;color:var(--dim);font:.8rem/1.55 system-ui,sans-serif}
+dt.sub{padding-left:1.1rem;font-style:italic}
+dt.emph{color:var(--ink);font-weight:600}
 footer{margin-top:1.6rem;color:var(--dim);font:.76rem/1.5 system-ui,sans-serif;
 border-top:1px solid var(--line);padding-top:.7rem}
 code{font:.8rem ui-monospace,monospace;color:var(--dim)}
@@ -59,13 +63,21 @@ def _spark(series, w=520, h=44):
 
 
 def _dl(pairs):
-    return "<dl>" + "".join(f"<dt>{html.escape(str(k))}</dt><dd>{html.escape(str(v))}</dd>"
-                            for k, v in pairs) + "</dl>"
+    """Rows are (label, value) or (label, value, css_class) — the class lets the power panel
+    mark sub-rows and the bottom line without smuggling markup through the escaper."""
+    out = []
+    for row in pairs:
+        k, v = row[0], row[1]
+        cls = f' class="{row[2]}"' if len(row) > 2 else ""
+        out.append(f"<dt{cls}>{html.escape(str(k))}</dt><dd>{html.escape(str(v))}</dd>")
+    return "<dl>" + "".join(out) + "</dl>"
 
 
 def render_html(entry, scene):
     card, narr, arc = entry["card"], entry["narrative"], entry["arc"]
     ch, ho, re_, pr = card["chronicle"], card["house"], card["relationships"], card["property"]
+    rep, P = card["reputation"], card["power"]
+    PR, PT, PC = P["roles"], P["totals"], P["coincidence"]
     t, oid = re_["totals"], card["oid"]
     # the narrative verbatim; only the thesis line gets a class for emphasis
     lines = []
@@ -93,13 +105,12 @@ def render_html(entry, scene):
       ("детей", ho['n_children']),
       ("душ в доме", ho['house_size']),
   ])}</div>
-  <div class="panel"><h2>Связи и власть</h2>{_dl([
+  <div class="panel"><h2>Связи</h2>{_dl([
       ("знала", re_['n_known']),
       ("говорила", t['n_spoke']),
       ("слышала", t['n_heard']),
-      ("изъятий сделала", f"{t['n_extorted']} ({t['mass_extorted']} кг)"),
-      ("изъятий против неё", f"{t['n_extorted_by']} ({t['mass_lost_to_extort']} кг)"),
-      ("отчислено наверх", f"{t['mass_remitted']} кг"),
+      ("клеймо", ", ".join(rep['branded_at_end']) if rep['ever_branded'] else "не носила"),
+      ("тиков под клеймом", rep['ticks_branded']),
   ])}</div>
   <div class="panel"><h2>Земля</h2>{_dl([
       ("владений", pr['n_tenures']),
@@ -108,6 +119,31 @@ def render_html(entry, scene):
       ("в финале", len(pr['final_cells'])),
   ])}{_spark(pr['series'])}</div>
 </div>
+<div class="panel wide"><h2>Власть — потоки массы, роли раздельно</h2>
+  <p class="note">Изъятие — это ПУЛ, делимый между вымогателями на клетке. Брутто события —
+  не личное число: приписанная доля восстановлена по правилу дележа (поровну, остаток
+  последнему) и сверена с реальными дельтами тел (гейт PF-SHARE). Где на клетке больше одной
+  жертвы, подушевая потеря из журнала не выводима и в «приписано» НЕ входит.</p>
+  {_dl([
+      ("аппроприация — платила", f"{PR['appropriate']['payer']}× ({PT['rent_paid']} кг)"),
+      ("аппроприация — получала", f"{PR['appropriate']['receiver']}× ({PT['rent_received']} кг)"),
+      ("вымогательство — такер", f"{PR['extort']['taker']}× (заводилой {PR['extort']['taker_as_actor']}×)"),
+      ("· брутто по этим событиям", f"{PT['extort_gross']} кг", "sub"),
+      ("· приписано ей", f"{PT['extort_attributed']} кг", "sub emph"),
+      ("· из них взяла одна", f"{PT['extort_solo']} кг", "sub"),
+      ("вымогательство — жертва", f"{PR['extort']['victim']}× ({PT['extorted_from_attributed']} кг"
+                                  + (f", ещё {PT['extorted_from_unresolved']} неразрешимых"
+                                     if PT['extorted_from_unresolved'] else "") + ")"),
+      ("ремитта — отдала / приняла", f"{PR['delegate_remit']['remitter']}× ({PT['remitted']} кг)"
+                                     f" / {PR['delegate_remit']['root']}× ({PT['received_remit']} кг)"),
+      ("платила и отнимала на той же клетке в тот же день",
+       f"{PC['paid_and_took_same_tick_cell']}× из {PC['of_n_paid']}; "
+       f"жертва оказывалась тем же рантье {PC['victim_was_the_landlord']}×"),
+      ("получала дань и была обобрана там же в тот же день",
+       f"{PC['received_and_was_robbed_same_tick_cell']}× из {PC['of_n_received']}; "
+       f"грабители оказывались теми же арендаторами {PC['robbers_were_the_tenants']}×"),
+      ("ИТОГО по властным потокам", f"{PT['net']:+} кг", "emph"),
+  ])}</div>
 <footer>Noether · E1 карточка пешки · сцена seed {scene['seed']}, {scene['days']} дней,
 G2-ON + intent=reflex · карточка v{CARD_VERSION} · <code>sha {card['sha']}</code><br>
 Проекции поверх единого EventLog; читатель мира не менял (E1-VOFF).</footer>
