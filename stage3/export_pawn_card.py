@@ -44,10 +44,23 @@ DEFAULT_OIDS = (58, 42)          # hero (власть) + contrast (жертва)
 
 def e1_scene(seed=7, days=400):
     """G2-ON *and* intent_policy='reflex' — without the intent layer the extort seam is
-    skipped and the power projections come out empty (Ф0 finding, WO §7.4)."""
-    return build_showcase_cfg(seed=seed, days=days, extort_on=True, delegate_on=True,
-                              revoke_tooth="reputation", extort_enforcers=3,
-                              delegate_enforcers=2, intent_policy="reflex")
+    skipped and the power projections come out empty (виток-1 Ф0 finding, WO §7.4).
+
+    Виток 2: `faithful_ledger=True`. The mirror defaults to OFF (so every β-3 anchor stays
+    byte-identical), but the card wants exactly what it emits — claim/lose/inherit (ownership
+    without snapshots), mark/unmark (branding) and appropriate (the flow). Turning it on here
+    changes the card's SOURCE, hence the flagship SHA is re-anchored (WO §1)."""
+    cfg = build_showcase_cfg(seed=seed, days=days, extort_on=True, delegate_on=True,
+                             revoke_tooth="reputation", extort_enforcers=3,
+                             delegate_enforcers=2, intent_policy="reflex")
+    cfg.faithful_ledger = True
+    # NOTE: deliberately nothing else. `faithful_ledger` is fingerprint-NEUTRAL (proved in the
+    # faithful-ledger WO), so the world — and therefore the hero's biography — is bit-identical
+    # to виток 1; only the card's SOURCE moves from snapshots to the log. Turning on e.g.
+    # `extort_reputation` to fatten the branding stream would CHANGE the simulation and rewrite
+    # #58's life, which is not a re-anchor but a different pawn. Reputation is fed by the
+    # delegate marks this scene already produces.
+    return cfg
 
 
 def build_package(oids, seed=7, days=400, every=1):
