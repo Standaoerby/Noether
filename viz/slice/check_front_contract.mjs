@@ -233,6 +233,53 @@ for (const name of consumers) {
 if (!/S\._syncBroken/.test(SRC)) fail("рантайм-страж S._syncBroken пропал из index.html");
 else console.log("  рантайм-страж S._syncBroken на месте ✓");
 
+// ---- E3 DIPTYCH-SYNC — the wiring of the two-pane view ------------------------ //
+// A diptych's entire claim is "these two things at the SAME instant". The data half of that is
+// already gated above (both foci resolve at every tick, from one package). What remains is the
+// WIRING, and wiring is where it actually broke while this was being built: the pane iframes
+// are rooted at /glass/, so a data path written relative to the diptych page resolves against
+// the WRONG directory inside them and 404s in silence — the pane just sits on its drop-zone.
+// Caught by loading it, not by reading it; locked here so the next author does not re-lose it.
+const DIP = join(HERE, "..", "diptych.html");
+let dipSrc = null;
+try { dipSrc = readFileSync(DIP, "utf8"); } catch (e) { dipSrc = null; }
+if (dipSrc === null) console.log("  diptych.html отсутствует — DIPTYCH-SYNC пропущен (ещё не построен)");
+else {
+  const srcs = [...dipSrc.matchAll(/\.src\s*=\s*`([^`]+)`/g)].map((m) => m[1]);
+  if (srcs.length !== 2) fail(`diptych: ожидалось 2 панели, найдено ${srcs.length}`);
+  else {
+    const dataOf = (u) => (u.match(/data=\$\{encodeURIComponent\((\w+)\)\}/) || [])[1];
+    const focusOf = (u) => (u.match(/focus=\$\{(\w+)\}/) || [])[1];
+    if (dataOf(srcs[0]) !== dataOf(srcs[1]))
+      fail("diptych: панели грузят РАЗНЫЕ пакеты — «один тик» тогда ничего не значит");
+    else console.log(`  обе панели над ОДНИМ пакетом (${dataOf(srcs[0])}) ✓`);
+    // the path handed to a pane must be pane-relative, or it 404s inside the iframe
+    const paneVar = dataOf(srcs[0]);
+    // NB: template literal — `\s` would be eaten by JS before RegExp ever sees it, so the
+    // backslashes are doubled. The gate caught its own broken pattern by failing LOUDLY
+    // ("путь ... undefined") instead of quietly matching nothing and passing.
+    const decl = (dipSrc.match(new RegExp(`const\\s+${paneVar}\\s*=\\s*"([^"]+)"`)) || [])[1];
+    if (!decl || !decl.startsWith("../"))
+      fail(`diptych: путь для панелей "${decl}" не относителен ПАНЕЛИ — внутри iframe он 404-ит молча`);
+    else console.log(`  путь панелей относителен панели ("${decl}") ✓`);
+    if (!srcs.every((u) => /embed=1/.test(u)))
+      fail("diptych: панель без embed=1 — мастер и панель будут дублировать контролы");
+    else console.log("  обе панели с embed=1 ✓");
+    const foci = srcs.map((u) => focusOf(u));
+    if (foci.some((f) => !f)) fail("diptych: фокус панели не разобран");
+  }
+  // the master must drive BOTH panes; a seek that reaches one pane is a diptych that lies
+  const seekFn = (dipSrc.match(/function seek\([\s\S]*?[\r\n]\}/) || [])[0] || "";
+  const posts = (seekFn.match(/postMessage/g) || []).length;
+  const loopsBoth = /\[\s*fa\s*,\s*fb\s*\]/.test(seekFn);
+  if (!posts || !loopsBoth)
+    fail("diptych: seek() не рассылает {cmd:'seek'} обеим панелям");
+  else console.log("  мастер-скраб адресует ОБЕ панели ✓");
+  // and it must not grow a per-pane scrub: two scrubs are two timelines
+  if (/id="scrub"/.test(dipSrc) && (dipSrc.match(/id="scrub"/g) || []).length > 1)
+    fail("diptych: больше одного скраба — два таймлайна вместо одного");
+}
+
 // the caption layer of Ф3 will read events by tick; prove the index is dense and sorted
 let prev = -1, unsorted = 0;
 for (const ev of events) { if (ev.t < prev) unsorted++; prev = ev.t; }
