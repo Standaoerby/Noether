@@ -110,6 +110,82 @@ for (const FOCUS of meta.slice.foci) {
               (nullMass ? `; строк с неразрешимой долей ${nullMass} (рисуются без числа)` : ""));
 }
 
+// ---- Track B: the one-tick contract of the focus layer, as a STANDING test ---- //
+// Bug #81 was found by eye, not by a gate: `updateFocus()` read `S.snaps[S.idx]` while the map
+// drew `curSnaps()[1]` — outline, arrows and caption belonged to different ticks. The package
+// gates could not see it by construction: they validate DATA, never the front's choice of tick.
+//
+// WHAT THIS TEST CAN AND CANNOT DO. Node has no DOM and no canvas, so pixels stay out of reach
+// — that boundary is unchanged and is stated, not worked around. But the tick SELECTION is pure
+// logic over {idx, snaps, frac}, so it is extracted from the page source and executed here for
+// real. Two layers:
+//   (a) DYNAMIC — `curSnaps`/`displayTick` are evaluated against a synthetic S, and the guard's
+//       own condition (panel tick == map tick) is replayed over every index including the hero
+//       ticks. This is the runtime guard `S._syncBroken`, run in CI instead of by eye.
+//   (b) STRUCTURAL — the focus-layer consumers must take their snapshot from `curSnaps()`; a
+//       raw `S.snaps[S.idx]` inside any of them is the exact shape of #81 and fails here.
+const HTML = readFileSync(join(HERE, "..", "glass", "index.html"), "utf8");
+const SRC = [...HTML.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+
+function fnBody(name) {
+  const i = SRC.indexOf(`function ${name}(`);
+  if (i < 0) return null;
+  let d = 0, started = false;
+  for (let k = SRC.indexOf("{", i); k < SRC.length; k++) {
+    if (SRC[k] === "{") { d++; started = true; }
+    else if (SRC[k] === "}") { d--; if (started && d === 0) return SRC.slice(i, k + 1); }
+  }
+  return null;
+}
+
+// (a) dynamic — the tick math, executed
+const curSrc = fnBody("curSnaps"), dispSrc = fnBody("displayTick");
+if (!curSrc || !dispSrc) fail("в index.html не найдены curSnaps/displayTick — тест устарел");
+else {
+  const mk = new Function("S", `${curSrc}\n${dispSrc}\nreturn {curSnaps, displayTick};`);
+  const fakeSnaps = snaps.map((s) => ({ t: s.t }));
+  let bad = 0, checked = 0;
+  for (let idx = 0; idx < fakeSnaps.length; idx++) {
+    const S = { idx, snaps: fakeSnaps, frac: 0 };
+    const { curSnaps, displayTick } = mk(S);
+    // this IS the guard from updateFocus(): the panel's snapshot vs the film's tick
+    const panelTick = curSnaps()[1].t;
+    checked++;
+    if (panelTick !== displayTick()) bad++;
+  }
+  if (bad) fail(`тик панели != тик карты на ${bad} из ${checked} позиций скраба`);
+  else console.log(`  один тик на всех ${checked} позициях скраба ✓ (страж S._syncBroken не встал)`);
+  // and explicitly at the hero ticks named in the WO
+  const HERO = [12, 13, 14, 168, 252, 321, 322];
+  const missed = HERO.filter((T) => {
+    const idx = fakeSnaps.findIndex((s) => s.t === T) - 1;
+    if (idx < 0) return false;
+    const S = { idx, snaps: fakeSnaps, frac: 0 };
+    const { curSnaps, displayTick } = mk(S);
+    return curSnaps()[1].t !== T || displayTick() !== T;
+  });
+  if (missed.length) fail(`геройские тики разошлись: ${missed}`);
+  else console.log(`  геройские тики ${HERO.join(", ")} — карта и панель совпали ✓`);
+}
+
+// (b) structural — every focus-layer consumer must derive its snapshot from curSnaps().
+// The consumer list is DERIVED, not hard-coded: anything that mentions FOCUS is a focus-layer
+// function by definition, so a NEW consumer added later is covered automatically. A fixed list
+// would quietly stop guarding the moment someone adds the fifth reader — the same "green on
+// emptiness" shape this whole test exists to prevent.
+const consumers = [...SRC.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)]
+  .map((m) => m[1])
+  .filter((n) => { const b = fnBody(n); return b && /\bFOCUS\b/.test(b); });
+if (!consumers.length) fail("не найдено ни одной функции, читающей FOCUS — фокус-слой исчез?");
+else console.log(`  потребителей фокус-слоя выведено: ${consumers.join(", ")}`);
+for (const name of consumers) {
+  if (/S\.snaps\s*\[\s*S\.idx\s*\]/.test(fnBody(name))) {
+    fail(`${name} читает S.snaps[S.idx] напрямую — это ровно форма бага #81`);
+  }
+}
+if (!/S\._syncBroken/.test(SRC)) fail("рантайм-страж S._syncBroken пропал из index.html");
+else console.log("  рантайм-страж S._syncBroken на месте ✓");
+
 // the caption layer of Ф3 will read events by tick; prove the index is dense and sorted
 let prev = -1, unsorted = 0;
 for (const ev of events) { if (ev.t < prev) unsorted++; prev = ev.t; }
