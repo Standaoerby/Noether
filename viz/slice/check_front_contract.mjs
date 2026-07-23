@@ -233,6 +233,98 @@ for (const name of consumers) {
 if (!/S\._syncBroken/.test(SRC)) fail("рантайм-страж S._syncBroken пропал из index.html");
 else console.log("  рантайм-страж S._syncBroken на месте ✓");
 
+// ---- E3 DIPTYCH-SYNC — the wiring of the two-pane view ------------------------ //
+// A diptych's entire claim is "these two things at the SAME instant". The data half of that is
+// already gated above (both foci resolve at every tick, from one package). What remains is the
+// WIRING, and wiring is where it actually broke while this was being built: the pane iframes
+// are rooted at /glass/, so a data path written relative to the diptych page resolves against
+// the WRONG directory inside them and 404s in silence — the pane just sits on its drop-zone.
+// Caught by loading it, not by reading it; locked here so the next author does not re-lose it.
+const DIP = join(HERE, "..", "diptych.html");
+let dipSrc = null;
+try { dipSrc = readFileSync(DIP, "utf8"); } catch (e) { dipSrc = null; }
+if (dipSrc === null) console.log("  diptych.html отсутствует — DIPTYCH-SYNC пропущен (ещё не построен)");
+else {
+  const srcs = [...dipSrc.matchAll(/\.src\s*=\s*`([^`]+)`/g)].map((m) => m[1]);
+  if (srcs.length !== 2) fail(`diptych: ожидалось 2 панели, найдено ${srcs.length}`);
+  else {
+    const dataOf = (u) => (u.match(/data=\$\{encodeURIComponent\((\w+)\)\}/) || [])[1];
+    const focusOf = (u) => (u.match(/focus=\$\{(\w+)\}/) || [])[1];
+    if (dataOf(srcs[0]) !== dataOf(srcs[1]))
+      fail("diptych: панели грузят РАЗНЫЕ пакеты — «один тик» тогда ничего не значит");
+    else console.log(`  обе панели над ОДНИМ пакетом (${dataOf(srcs[0])}) ✓`);
+    // the path handed to a pane must be pane-relative, or it 404s inside the iframe
+    const paneVar = dataOf(srcs[0]);
+    // NB: template literal — `\s` would be eaten by JS before RegExp ever sees it, so the
+    // backslashes are doubled. The gate caught its own broken pattern by failing LOUDLY
+    // ("путь ... undefined") instead of quietly matching nothing and passing.
+    const decl = (dipSrc.match(new RegExp(`const\\s+${paneVar}\\s*=\\s*"([^"]+)"`)) || [])[1];
+    if (!decl || !decl.startsWith("../"))
+      fail(`diptych: путь для панелей "${decl}" не относителен ПАНЕЛИ — внутри iframe он 404-ит молча`);
+    else console.log(`  путь панелей относителен панели ("${decl}") ✓`);
+    if (!srcs.every((u) => /embed=1/.test(u)))
+      fail("diptych: панель без embed=1 — мастер и панель будут дублировать контролы");
+    else console.log("  обе панели с embed=1 ✓");
+    const foci = srcs.map((u) => focusOf(u));
+    if (foci.some((f) => !f)) fail("diptych: фокус панели не разобран");
+  }
+  // the master must drive BOTH panes; a seek that reaches one pane is a diptych that lies
+  const seekFn = (dipSrc.match(/function seek\([\s\S]*?[\r\n]\}/) || [])[0] || "";
+  const posts = (seekFn.match(/postMessage/g) || []).length;
+  const loopsBoth = /\[\s*fa\s*,\s*fb\s*\]/.test(seekFn);
+  if (!posts || !loopsBoth)
+    fail("diptych: seek() не рассылает {cmd:'seek'} обеим панелям");
+  else console.log("  мастер-скраб адресует ОБЕ панели ✓");
+  // and it must not grow a per-pane scrub: two scrubs are two timelines
+  if (/id="scrub"/.test(dipSrc) && (dipSrc.match(/id="scrub"/g) || []).length > 1)
+    fail("diptych: больше одного скраба — два таймлайна вместо одного");
+}
+
+// ---- E3 DIPTYCH-HONEST — the headline numbers are the CARD's, not the front's ---- //
+// -2.07 / +190.35 / 626.46 are what the whole frame asserts. If the diptych computed them
+// itself, it would be a second implementation of the attribution the card already did and
+// PF-SHARE already verified against real body deltas — and the two could drift while both
+// looked fine. So: extract `head()` from the page, run it against the REAL card entry, and
+// require that every number it renders is present verbatim in cards.json.
+if (dipSrc !== null) {
+  const headSrc = (dipSrc.match(/function head\([\s\S]*?[\r\n]\}/) || [])[0];
+  if (!headSrc) fail("diptych: функция head() не найдена — тест устарел");
+  else {
+    // `esc` is provided as a stub, NOT extracted: its own source contains a ";" inside the
+    // string "&amp;", so a naive extraction truncates it into garbage and the eval dies with
+    // a SyntaxError that looks like the page is broken when it is the TEST that is. Escaping
+    // is not what this gate is about — the numbers are.
+    const escSrc = 'const esc=(t)=>String(t);';
+    const mkHead = new Function(`${escSrc}
+${headSrc}
+return head;`)();
+    for (const oid of meta.slice.foci) {
+      const e = cards.entries[String(oid)];
+      const T = e.card.power.totals;
+      const box = { innerHTML: "" };
+      mkHead(box, oid, e);
+      const html = box.innerHTML;
+      const want = [
+        [T.net.toFixed(2), "нетто"],
+        [T.rent_received.toFixed(2), "рента получена"],
+        [T.rent_paid.toFixed(2), "рента уплачена"],
+        [String(e.card.power.roles.extort.taker), "изъятий с участием"],
+        [T.extort_attributed.toFixed(2), "приписано"],
+        [T.extort_gross.toFixed(2), "брутто"],
+      ];
+      const missing = want.filter(([v]) => !html.includes(v)).map(([v, n]) => `${n}=${v}`);
+      if (missing.length) fail(`diptych #${oid}: в шапке нет карточных чисел: ${missing.join(", ")}`);
+      else console.log(`  #${oid}: шапка диптиха несёт числа КАРТОЧКИ ` +
+                       `(нетто ${T.net.toFixed(2)}, рента ${T.rent_received.toFixed(2)}, ` +
+                       `приписано ${T.extort_attributed.toFixed(2)}) ✓`);
+    }
+  }
+  // and it must not re-derive them: no folding over the per-event flow arrays anywhere
+  const recompute = /\.(paid|received|extorted|extorted_by|remitted)[\s\S]{0,80}?\.reduce\(/.test(dipSrc);
+  if (recompute) fail("diptych: складывает потоки сам — это вторая реализация атрибуции");
+  else console.log("  диптих не пересчитывает потоки, только читает totals ✓");
+}
+
 // the caption layer of Ф3 will read events by tick; prove the index is dense and sorted
 let prev = -1, unsorted = 0;
 for (const ev of events) { if (ev.t < prev) unsorted++; prev = ev.t; }
