@@ -44,6 +44,7 @@ ARMS = {
     "base":    dict(inherit_on=False, frailty="off"),
     "nodeath": dict(inherit_on=True,  frailty="off"),
     "mortal":  dict(inherit_on=True,  frailty="gompertz"),
+    "escheat": dict(inherit_on=True,  frailty="gompertz", heir_fallback="escheat"),  # K3
 }
 
 
@@ -73,8 +74,8 @@ def _snapshot(w):
     }
 
 
-def _run(arm, seed):
-    cfg = _cfg(days=0, seed=seed, rho=0.1, owner="claim", arena=None, **ARMS[arm])
+def _run(arm, seed, rho=0.1):
+    cfg = _cfg(days=0, seed=seed, rho=rho, owner="claim", arena=None, **ARMS[arm])
     w = Polis(EventLog(), cfg)
     snaps = {}
     for _ in range(T):
@@ -91,19 +92,20 @@ def main():
     ap.add_argument("--arms", default="base,nodeath,mortal")
     ap.add_argument("--seeds", default="7,8,9")
     ap.add_argument("--fires", action="store_true", help="print the MK-INHERIT-FIRES line")
+    ap.add_argument("--rho", type=float, default=0.1, help="appropriation (0.1 science / 0.5 control)")
     args = ap.parse_args()
     arms = args.arms.split(",")
     seeds = [int(s) for s in args.seeds.split(",")]
 
     print(HDR)
-    print(f"mod-K dynasty — rho=0.1 claim, arena=none, T={T}. Metrics: canon-25 _snapshot@Polis.")
+    print(f"mod-K dynasty — rho={args.rho} claim, arena=none, T={T}. Metrics: canon-25 _snapshot@Polis.")
     print(HDR)
     for arm in arms:
         print(f"ARM {arm} ({ARMS[arm]}):")
         print(f"  {'seed':>4}{'t':>6}{'pop':>7}{'owner_share':>12}{'own_cells':>10}"
               f"{'own_houses':>11}{'house_gini':>11}{'top_h_share':>12}{'maxGen':>7}{'inh_ev':>8}")
         for seed in seeds:
-            snaps, fires = _run(arm, seed)
+            snaps, fires = _run(arm, seed, rho=args.rho)
             for t in SNAPS:
                 if t in snaps:
                     s = snaps[t]
