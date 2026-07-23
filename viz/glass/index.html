@@ -41,6 +41,7 @@
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font:13px/1.4 "Segoe UI",system-ui,sans-serif;overflow:hidden}
   #app{display:grid;grid-template-columns:1fr 340px;grid-template-rows:1fr auto;height:100vh}
+body.nopanel #app{grid-template-columns:1fr}
   #stage{position:relative;grid-row:1;grid-column:1;overflow:hidden;background:#06070a}
   #stage canvas{position:absolute;top:0;left:0}
   #side{grid-row:1/3;grid-column:2;background:var(--panel);border-left:1px solid var(--line);
@@ -217,6 +218,11 @@ const FOCUS=(()=>{const v=new URLSearchParams(location.search).get("focus");
 // play/step/scrub/layers — and two copies of it is what makes a two-pane view unreadable.
 // The side panel is NOT chrome: in a slice it carries the pawn's card, which is the content.
 const EMBED=new URLSearchParams(location.search).get("embed")==="1";
+// `panel=0` — a pane that shows the MAP ONLY. Separate from embed on purpose: embed says "I am
+// inside a master shell", panel says "the master owns the numbers". The diptych needs both —
+// its whole point is two MAPS side by side under one thesis, and a docked six-projection card
+// in each pane turns a contrast frame into two inspectors sitting next to each other.
+const SHOW_PANEL=new URLSearchParams(location.search).get("panel")!=="0";
 async function tryFetch(){
   try{
     const meta = await (await fetch(DATA_DIR+"/meta.json",{cache:"no-store"})).json();
@@ -876,6 +882,25 @@ function updateFocus(){
   S._caps=(e.captions&&e.captions.items)||[];
 }
 
+// ---- the seam a master shell reads the pane through ---------------------- //
+// A diptych needs each pane's per-tick focus state (which cells it holds, whether it is alive)
+// even when the side panel is hidden. Exposing ONE documented function beats letting the shell
+// reach into internals: `S` and the rest are `const` at module scope and are NOT window
+// properties, so "reaching in" silently reads undefined — which is exactly how three of my own
+// measurements this session came back as zeros. Same numbers the panel shows, computed once,
+// at the tick the MAP is drawing.
+window.focusState = function(){
+  if(FOCUS===null || !S.snaps.length) return null;
+  const B=curSnaps()[1];
+  const cells=(B.owners||[]).filter(o=>o[2]===FOCUS).map(o=>[o[0],o[1]]);
+  const here=(B.pawns||[]).find(p=>p[0]===FOCUS);
+  const caps=(S._caps||[]), now=caps.filter(c=>c.t===B.t), past=caps.filter(c=>c.t<B.t);
+  return {t:B.t, cells, alive:!!here,
+          pos:here?[here[1],here[2]]:null, body:here?here[3]:null,
+          now:now.map(c=>({t:c.t,text:c.text})),
+          last:past.length?{t:past[past.length-1].t,text:past[past.length-1].text}:null};
+};
+
 // ============================ side panel ============================
 function drawSpark(cv, series, color, opts={}){
   const ctx=cv.getContext("2d"), W=cv.width, H=cv.height;
@@ -1088,6 +1113,10 @@ if(EMBED){
   const c=$("controls"); if(c) c.style.display="none";
   const h=$("hint");     if(h) h.style.display="none";
   document.body.classList.add("embed");
+}
+if(!SHOW_PANEL){
+  const sd=$("side"); if(sd) sd.style.display="none";
+  document.body.classList.add("nopanel");
 }
 // hotkeys
 window.addEventListener("keydown",e=>{

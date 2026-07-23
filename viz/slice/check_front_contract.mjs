@@ -280,6 +280,51 @@ else {
     fail("diptych: больше одного скраба — два таймлайна вместо одного");
 }
 
+// ---- E3 DIPTYCH-HONEST — the headline numbers are the CARD's, not the front's ---- //
+// -2.07 / +190.35 / 626.46 are what the whole frame asserts. If the diptych computed them
+// itself, it would be a second implementation of the attribution the card already did and
+// PF-SHARE already verified against real body deltas — and the two could drift while both
+// looked fine. So: extract `head()` from the page, run it against the REAL card entry, and
+// require that every number it renders is present verbatim in cards.json.
+if (dipSrc !== null) {
+  const headSrc = (dipSrc.match(/function head\([\s\S]*?[\r\n]\}/) || [])[0];
+  if (!headSrc) fail("diptych: функция head() не найдена — тест устарел");
+  else {
+    // `esc` is provided as a stub, NOT extracted: its own source contains a ";" inside the
+    // string "&amp;", so a naive extraction truncates it into garbage and the eval dies with
+    // a SyntaxError that looks like the page is broken when it is the TEST that is. Escaping
+    // is not what this gate is about — the numbers are.
+    const escSrc = 'const esc=(t)=>String(t);';
+    const mkHead = new Function(`${escSrc}
+${headSrc}
+return head;`)();
+    for (const oid of meta.slice.foci) {
+      const e = cards.entries[String(oid)];
+      const T = e.card.power.totals;
+      const box = { innerHTML: "" };
+      mkHead(box, oid, e);
+      const html = box.innerHTML;
+      const want = [
+        [T.net.toFixed(2), "нетто"],
+        [T.rent_received.toFixed(2), "рента получена"],
+        [T.rent_paid.toFixed(2), "рента уплачена"],
+        [String(e.card.power.roles.extort.taker), "изъятий с участием"],
+        [T.extort_attributed.toFixed(2), "приписано"],
+        [T.extort_gross.toFixed(2), "брутто"],
+      ];
+      const missing = want.filter(([v]) => !html.includes(v)).map(([v, n]) => `${n}=${v}`);
+      if (missing.length) fail(`diptych #${oid}: в шапке нет карточных чисел: ${missing.join(", ")}`);
+      else console.log(`  #${oid}: шапка диптиха несёт числа КАРТОЧКИ ` +
+                       `(нетто ${T.net.toFixed(2)}, рента ${T.rent_received.toFixed(2)}, ` +
+                       `приписано ${T.extort_attributed.toFixed(2)}) ✓`);
+    }
+  }
+  // and it must not re-derive them: no folding over the per-event flow arrays anywhere
+  const recompute = /\.(paid|received|extorted|extorted_by|remitted)[\s\S]{0,80}?\.reduce\(/.test(dipSrc);
+  if (recompute) fail("diptych: складывает потоки сам — это вторая реализация атрибуции");
+  else console.log("  диптих не пересчитывает потоки, только читает totals ✓");
+}
+
 // the caption layer of Ф3 will read events by tick; prove the index is dense and sorted
 let prev = -1, unsorted = 0;
 for (const ev of events) { if (ev.t < prev) unsorted++; prev = ev.t; }
