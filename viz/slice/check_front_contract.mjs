@@ -168,6 +168,53 @@ else {
   else console.log(`  геройские тики ${HERO.join(", ")} — карта и панель совпали ✓`);
 }
 
+// (a2) SEEK TRUTH — `seek(T)` must never show a tick LATER than T.
+// The master scrubber (split.html, and the E3 diptych) drives panes with {cmd:'seek',t}. Until
+// the front-truth fix, `seekTick` aimed at the snapshot whose t == T while the film draws
+// snaps[idx+1] — so the master's label said T and the pane showed T+1 (measured at
+// t=14/100/321/322). Both panes shifted alike, so cross-pane sync survived; what lied was the
+// TIME. Same class as #81, one level up. Locked here so it cannot come back quietly.
+//
+// THE INVARIANT IS "<=", NOT "==" — and that correction came from testing against β-3 rather
+// than from reasoning. β-3 packages are exported sparsely (--every K), so the nearest snapshot
+// at-or-before T can be genuinely earlier: there seek(20) lands on 18 and seek(100) on 99, and
+// that is CORRECT. What is never correct is landing LATER than asked — the old behaviour. So
+// the gate asserts `shown <= T` and `shown` is the greatest available tick <= T. The slice
+// package is dense (every=1), so for it this reduces to equality and is reported as such.
+const seekSrc = fnBody("seekTick");
+if (!seekSrc) fail("в index.html не найден seekTick — тест устарел");
+else if (curSrc && dispSrc) {
+  const mkSeek = new Function("$", "S",
+    `${curSrc}
+${dispSrc}
+${seekSrc}
+return {curSnaps, displayTick, seekTick};`);
+  const fakeSnaps = snaps.map((s) => ({ t: s.t }));
+  const noDom = () => null;              // seekTick reaches the DOM only through $()
+  const off = [];
+  for (const T of fakeSnaps.map((s) => s.t)) {
+    const S = { idx: 0, snaps: fakeSnaps, frac: 0, playing: false };
+    const api = mkSeek(noDom, S);
+    api.seekTick(T);
+    // the film always draws B = snaps[idx+1], so the first tick is unreachable by
+    // construction; it is not counted against the invariant, and that is said, not hidden
+    const shown = api.displayTick();
+    // greatest available tick <= T; for a dense package that is T itself
+    const want = Math.max(...fakeSnaps.map((s) => s.t).filter((x) => x <= T));
+    if (T > fakeSnaps[0].t && shown !== want) off.push(`${T}->${shown} (ждали ${want})`);
+  }
+  if (off.length) fail(`seek(T) промахивается: ${off.slice(0, 6).join(", ")} (всего ${off.length})`);
+  else console.log(`  seek(T) -> наибольший доступный тик <= T, на всех ` +
+                   `${fakeSnaps.length - 1} тиках ✓ (пакет плотный, значит ровно T)`);
+}
+
+// (a3) EMBED — the parameter must be READ, not merely promised in a comment. It sat in main
+// since β-3 as a comment only: split.html passed embed=1 into both iframes and nothing read it.
+// A comment describing a feature nobody implemented is worse than no comment — it is a claim
+// the reader has no reason to doubt.
+if (!/get\("embed"\)/.test(SRC)) fail("embed=1 не читается кодом — комментарий обещает несуществующее");
+else console.log("  embed=1 читается кодом, не только комментарием ✓");
+
 // (b) structural — every focus-layer consumer must derive its snapshot from curSnaps().
 // The consumer list is DERIVED, not hard-coded: anything that mentions FOCUS is a focus-layer
 // function by definition, so a NEW consumer added later is covered automatically. A fixed list

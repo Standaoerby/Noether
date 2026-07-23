@@ -210,6 +210,13 @@ const DATA_DIR=(new URLSearchParams(location.search).get("data")||"./data").repl
 // point of the slice is that map, card and caption reduce to one tick (gate E2-SYNC).
 const FOCUS=(()=>{const v=new URLSearchParams(location.search).get("focus");
   return v===null||v===""?null:parseInt(v,10);})();
+// `embed=1` — a pane inside a master shell (split.html, and the E3 diptych). The comment in
+// this file promised it for the whole of β-3 while NO code read the parameter: split.html has
+// been passing it into both iframes since then and it was silently ignored. Making the comment
+// true instead of deleting it, because the master duplicates exactly this chrome — its own
+// play/step/scrub/layers — and two copies of it is what makes a two-pane view unreadable.
+// The side panel is NOT chrome: in a slice it carries the pawn's card, which is the content.
+const EMBED=new URLSearchParams(location.search).get("embed")==="1";
 async function tryFetch(){
   try{
     const meta = await (await fetch(DATA_DIR+"/meta.json",{cache:"no-store"})).json();
@@ -224,17 +231,27 @@ async function tryFetch(){
   }catch(e){ return false; }
 }
 // β-3 split-screen sync: the parent posts {cmd:'seek',t} / {cmd:'layer',key,on}; we obey and
-// (on local scrub) echo {cmd:'scrub',t} up so the sibling pane follows. embed=1 hides chrome.
+// embed=1 hides this pane's own chrome (implemented below). NOTE: an earlier version of this
+// comment also promised that a local scrub echoes {cmd:'scrub',t} UP to the master so the
+// sibling pane follows. It never did — there is no postMessage call in this file at all. The
+// sync is one-way: master -> panes. Said plainly rather than left as a third promise nobody
+// kept; a two-way echo is a feature request, not a bug fix, and is not smuggled in here.
 window.addEventListener("message",e=>{
   const d=e.data||{}; if(d.cmd==="seek" && S.snaps.length){ seekTick(d.t); }
   else if(d.cmd==="layer" && d.key in S.layer){ S.layer[d.key]=!!d.on;
     const cb=layerRow.querySelector('label[data-key="'+d.key+'"] input'); if(cb)cb.checked=!!d.on; }
 });
 function seekTick(t){
-  // nearest snapshot index at-or-before t (snaps may be sparse under --every K); the rAF
-  // loop repaints on its own, so we only move the cursor here.
+  // Target the tick the film DISPLAYS, not the one it interpolates FROM. `curSnaps()` draws
+  // B = snaps[idx+1] ("the tick being entered"), so setting idx to the snapshot whose t == t
+  // put the requested tick on screen ONE LATE: measured +1 at t=14/100/321/322. Both panes of
+  // split.html shifted alike, so cross-pane sync survived — but the master label lied about
+  // which tick was on screen. Same class as the #81 panel/map off-by-one, one level up, and
+  // it sat in main since β-3. Checked before fixing: nothing downstream compensated for it
+  // (split.html posts and prints t raw), so this is a fix, not a double correction.
   let best=0; for(let i=0;i<S.snaps.length;i++){ if(S.snaps[i].t<=t) best=i; else break; }
-  S.idx=best; S.frac=0; S.playing=false;
+  S.idx=Math.max(0, best-1);          // so that snaps[S.idx+1].t == t
+  S.frac=0; S.playing=false;
   const sc=$("scrub"); if(sc) sc.value=S.idx;
 }
 function parseJsonl(t){
@@ -1067,6 +1084,11 @@ LAYERS.forEach(l=>{
   lab.appendChild(cb); lab.appendChild(document.createTextNode(l.n));
   lab.dataset.key=l.key; layerRow.appendChild(lab);
 });
+if(EMBED){
+  const c=$("controls"); if(c) c.style.display="none";
+  const h=$("hint");     if(h) h.style.display="none";
+  document.body.classList.add("embed");
+}
 // hotkeys
 window.addEventListener("keydown",e=>{
   if(e.key===" "){e.preventDefault();$("btnPlay").click();}
