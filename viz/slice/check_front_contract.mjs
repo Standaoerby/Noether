@@ -168,11 +168,18 @@ else {
   else console.log(`  геройские тики ${HERO.join(", ")} — карта и панель совпали ✓`);
 }
 
-// (b) structural — every focus-layer consumer must derive its snapshot from curSnaps()
-for (const name of ["updateFocus", "drawFocusFlows", "drawGlyphs"]) {
-  const body = fnBody(name);
-  if (!body) { fail(`функция ${name} не найдена — фокус-слой переименован?`); continue; }
-  if (/S\.snaps\s*\[\s*S\.idx\s*\]/.test(body)) {
+// (b) structural — every focus-layer consumer must derive its snapshot from curSnaps().
+// The consumer list is DERIVED, not hard-coded: anything that mentions FOCUS is a focus-layer
+// function by definition, so a NEW consumer added later is covered automatically. A fixed list
+// would quietly stop guarding the moment someone adds the fifth reader — the same "green on
+// emptiness" shape this whole test exists to prevent.
+const consumers = [...SRC.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)]
+  .map((m) => m[1])
+  .filter((n) => { const b = fnBody(n); return b && /\bFOCUS\b/.test(b); });
+if (!consumers.length) fail("не найдено ни одной функции, читающей FOCUS — фокус-слой исчез?");
+else console.log(`  потребителей фокус-слоя выведено: ${consumers.join(", ")}`);
+for (const name of consumers) {
+  if (/S\.snaps\s*\[\s*S\.idx\s*\]/.test(fnBody(name))) {
     fail(`${name} читает S.snaps[S.idx] напрямую — это ровно форма бага #81`);
   }
 }
