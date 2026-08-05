@@ -63,9 +63,10 @@ A read-only lens over the sim (the canon is never touched; fingerprint-gated). I
 ```bash
 pip install -r requirements.txt          # numpy, matplotlib (dev); reproducible env: requirements-lock.txt
 
-python3 Code/verify_all.py               # default = the canonical set (the tower + the stage3 smoke)
-python3 Code/verify_all.py --suite all   # the WHOLE Noether claim: canon tower + the stage3 column
-python3 Code/sim_stage2.py               # cognition layer: ON/OFF, conservation, replay
+cd Code                                  # REQUIRED: runners are resolved relative to CWD=Code/
+python3 verify_all.py                    # default = the canonical set (the tower + the stage3 smoke)
+python3 verify_all.py --suite all        # the WHOLE Noether claim: canon tower + the stage3 column
+python3 sim_stage2.py                    # cognition layer: ON/OFF, conservation, replay
 ```
 
 ### Test suites (`--suite`)
